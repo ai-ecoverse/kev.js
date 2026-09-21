@@ -35,10 +35,12 @@ reference. The 300 records are held-out transfer-v4 development data (sources Ke
 | Kev-0.8B `q8f32` (`kev-0.8b@2256796`) | 822 MB | 0.660 / 0.657 | 0.475 / 0.472 | 0.0063 / 0.085 | 3 / 300 | 108 ms |
 | Kev-0.8B `q8` (int8, fp16 activations) | 788 MB | 0.663 / 0.657 | 0.476 / 0.472 | 0.0073 / 0.087 | 4 / 300 | 115 ms |
 | Kev-4B `q8f32` (`kev-4b@4bc64c6`) | 4.7 GB | 0.773 / 0.773 | 0.324 / 0.324 | 0.0028 / 0.075 | 0 / 300 | 360 ms |
-| Kev-9B `q8f32` (`kev-9b@442e597`) | 8.8 GB | pending | | | | |
+| Kev-9B `q8f32` (`kev-9b@442e597`) | 8.8 GB | 0.800 / 0.800 | 0.318 / 0.318 | 0.0033 / 0.160 | 0 / 300 | 570 ms |
 
-Kev's own PyTorch server takes 329 ms (Kev-0.8B) and 779 ms (Kev-4B) for a comparable request on an M5 with MPS,
-which has no fast DeltaNet kernels. The WASM (CPU) fallback is roughly 5× slower than WebGPU. The largest
+Kev's own PyTorch server takes 329 ms (Kev-0.8B), 779 ms (Kev-4B) and about 2 s (Kev-9B) for a comparable request
+on an M5 with MPS, which has no fast DeltaNet kernels. Kev-9B needs a GPU with roughly 9 GB free for its weights,
+and some browsers cap one origin's Cache Storage below that; the loader then runs uncached and downloads again next
+time. The WASM (CPU) fallback is roughly 5× slower than WebGPU. The largest
 deviations come from near-ties, where the reference itself is split close to 50/50.
 
 `q8f32` (int8 weights, fp32 activations) is the default everywhere. int4 is not usable: at 0.8B, round-to-nearest,

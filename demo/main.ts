@@ -213,7 +213,7 @@ document.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.
 const MODEL_FACTS: Record<string, { size: string; acc: string; ms: string }> = {
   "kev-0.8b": { size: "822 MB", acc: "0.660 / 0.475", ms: "108 ms" },
   "kev-4b": { size: "4.7 GB", acc: "0.773 / 0.324", ms: "360 ms" },
-  "kev-9b": { size: "—", acc: "—", ms: "—" },
+  "kev-9b": { size: "8.8 GB", acc: "0.800 / 0.318", ms: "570 ms" },
 };
 const table = document.getElementById("model-table");
 if (table) table.innerHTML = models.map((m) => {
