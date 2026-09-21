@@ -21,8 +21,8 @@ export interface LoadOptions extends KevOptions {
   sessionOptions?: InferenceSession.SessionOptions;
 }
 
-async function readWithProgress(res: Response, file: string, onProgress?: (p: Progress) => void): Promise<Uint8Array> {
-  const total = Number(res.headers.get("content-length") ?? 0);
+async function readWithProgress(res: Response, file: string, onProgress?: (p: Progress) => void, expected = 0): Promise<Uint8Array> {
+  const total = expected || Number(res.headers.get("content-length") ?? 0);
   if (!res.body || !onProgress) return new Uint8Array(await res.arrayBuffer());
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -40,17 +40,22 @@ async function readWithProgress(res: Response, file: string, onProgress?: (p: Pr
   return out;
 }
 
-export async function fetchFile(url: string, o: { cacheName?: string | null; onProgress?: (p: Progress) => void; file?: string } = {}): Promise<Uint8Array> {
+export async function fetchFile(url: string, o: { cacheName?: string | null; onProgress?: (p: Progress) => void; file?: string; bytes?: number } = {}): Promise<Uint8Array> {
   const file = o.file ?? url;
   const cache = o.cacheName !== null && typeof caches !== "undefined" ? await caches.open(o.cacheName ?? "kev-web-v1") : null;
   const hit = await cache?.match(url);
-  if (hit) return readWithProgress(hit, file, o.onProgress);
+  if (hit) return readWithProgress(hit, file, o.onProgress, o.bytes);
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+  // read first and cache the bytes afterwards: cache.put(res.clone()) would download the whole body before it
+  // resolves, so a multi-hundred-MB file would report no progress at all
+  const data = await readWithProgress(res, file, o.onProgress, o.bytes);
   if (cache) {
-    try { await cache.put(url, res.clone()); } catch { /* quota: run uncached */ }
+    try {
+      await cache.put(url, new Response(data as BodyInit, { headers: { "content-type": res.headers.get("content-type") ?? "application/octet-stream", "content-length": String(data.length) } }));
+    } catch { /* quota: run uncached */ }
   }
-  return readWithProgress(res, file, o.onProgress);
+  return data;
 }
 
 const join = (base: string, path: string) => `${base.replace(/\/$/, "")}/${path}`;
@@ -61,7 +66,7 @@ export async function loadKev(baseUrl: string, o: LoadOptions): Promise<Kev> {
   const variant = o.variant ?? Object.keys(manifest.variants)[0];
   const v = manifest.variants[variant];
   if (!v) throw new Error(`unknown variant ${variant}; have ${Object.keys(manifest.variants).join(", ")}`);
-  const get = (p: string) => fetchFile(join(baseUrl, p), { cacheName: o.cacheName, onProgress: o.onProgress, file: p });
+  const get = (p: string) => fetchFile(join(baseUrl, p), { cacheName: o.cacheName, onProgress: o.onProgress, file: p, bytes: v.sizes?.[p] });
   const [tokJson, tokCfg, head, graph, ...data] = await Promise.all([
     text(manifest.files.tokenizer), text(manifest.files.tokenizer_config), get(manifest.files.head), get(v.model), ...v.data.map(get),
   ]);

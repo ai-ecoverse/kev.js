@@ -53,7 +53,9 @@ def main():
         inputs, outputs = io_info(f"{a.out}/{name}/model.onnx")
         v = {"model": f"{name}/model.onnx", "data": [f"{name}/{f}" for f in data],
              "bytes": sum(os.path.getsize(f"{a.out}/{name}/{f}") for f in ["model.onnx", *data]),
-             "io_dtype": next(o["type"] for o in outputs if o["name"] == "hidden_states"), "inputs": inputs, "outputs": outputs}
+             "io_dtype": next(o["type"] for o in outputs if o["name"] == "hidden_states"),
+             "sizes": {f"{name}/{f}": os.path.getsize(f"{a.out}/{name}/{f}") for f in ["model.onnx", *data]},
+             "inputs": inputs, "outputs": outputs}
         if fixtures:
             import numpy as np
             rt = OrtKev(f"{a.out}/{name}/model.onnx", f"{a.out}/head.safetensors")

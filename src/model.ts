@@ -27,6 +27,8 @@ export interface VariantManifest {
   data: string[];
   bytes: number;
   io_dtype: "float16" | "float32";
+  /** bytes per file, so download progress is right even without a content-length header */
+  sizes?: Record<string, number>;
   inputs: IOInfo[];
   outputs: IOInfo[];
   /** parity against the fp32 PyTorch model on the bundled fixtures */
