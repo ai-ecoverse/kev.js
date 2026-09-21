@@ -26,6 +26,20 @@ export const haveModel = existsSync(`${modelDir}/manifest.json`);
 
 const HF = "https://huggingface.co/ai-ecoverse/kev.js/resolve/main";
 
+/** fetch with retries: connecting to the HF CDN can time out transiently */
+async function fetchText(url: string, attempts = 4): Promise<string> {
+  for (let i = 1; ; i++) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+      return await res.text();
+    } catch (e) {
+      if (i >= attempts || String(e).includes("HTTP 4")) throw e;
+      await new Promise((r) => setTimeout(r, 500 * i));
+    }
+  }
+}
+
 /** The tokenizer the bundle ships: the local bundle or build output when present, else the published copy on Hugging
  * Face (cached in the OS temp dir), so CI can run the encoding tests without weights. */
 export async function tokenizer(): Promise<Tokenizer> {
@@ -34,9 +48,7 @@ export async function tokenizer(): Promise<Tokenizer> {
     if (local) return readFileSync(`${local}/${f}`, "utf8");
     const cached = join(tmpdir(), `kev-js-${model}-${f}`);
     if (!existsSync(cached)) {
-      const res = await fetch(`${HF}/${model}/${f}`);
-      if (!res.ok) throw new Error(`${model}/${f}: HTTP ${res.status}`);
-      writeFileSync(cached, await res.text());
+      writeFileSync(cached, await fetchText(`${HF}/${model}/${f}`));
     }
     return readFileSync(cached, "utf8");
   };
