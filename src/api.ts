@@ -102,6 +102,59 @@ export function render(v: JSONContent | undefined, indent = 0): string {
     .join("\n");
 }
 
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"] as const;
+const DATE_RE = new RegExp(String.raw`\b(?:${MONTHS.join("|")}) \d{1,2}, \d{4}\b|\b\d{4}-\d{2}-\d{2}\b`, "g");
+
+/** UTC day number for an absolute date, or null if the text is not a real calendar day (e.g. February 30). */
+function utcDay(raw: string): number | null {
+  let y: number, month: number, d: number;
+  if (raw.includes(",")) {
+    const m = raw.match(/^([A-Za-z]+) (\d{1,2}), (\d{4})$/);
+    if (!m) return null;
+    month = (MONTHS as readonly string[]).indexOf(m[1]);
+    if (month < 0) return null;
+    d = Number(m[2]); y = Number(m[3]);
+  } else {
+    const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return null;
+    y = Number(m[1]); month = Number(m[2]) - 1; d = Number(m[3]);
+  }
+  const utc = Date.UTC(y, month, d);
+  const dt = new Date(utc);
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== month || dt.getUTCDate() !== d) return null;
+  return utc / 86_400_000;
+}
+
+/** Port of kev.api.date_facts: one sentence per pair of absolute dates, in order of first appearance. */
+export function dateFacts(text: string): string {
+  const found: { raw: string; day: number }[] = [];
+  for (const m of text.matchAll(DATE_RE)) {
+    const raw = m[0];
+    if (found.some((x) => x.raw === raw)) continue;
+    const day = utcDay(raw);
+    if (day != null) found.push({ raw, day });
+  }
+  const facts: string[] = [];
+  for (let i = 0; i < found.length; i++) {
+    for (let j = i + 1; j < found.length; j++) {
+      const n = found[j].day - found[i].day;
+      facts.push(n === 0
+        ? `${found[j].raw} is the same day as ${found[i].raw}.`
+        : `${found[j].raw} is ${Math.abs(n)} day${Math.abs(n) !== 1 ? "s" : ""} ${n > 0 ? "after" : "before"} ${found[i].raw}.`);
+    }
+  }
+  return facts.join(" ");
+}
+
+/** Port of kev.api.with_date_facts / KEV_DATE_FACTS=1: append day counts when two or more absolute dates appear. */
+export function withDateFacts(state: JSONContent): JSONContent {
+  const facts = dateFacts(render(state));
+  if (!facts) return state;
+  if (isObject(state)) return { ...state, date_facts: facts };
+  if (Array.isArray(state)) return [...state, { date_facts: facts }];
+  return `${state}\n\ndate_facts: ${facts}`;
+}
+
 export function optionText(name: string, desc: JSONContent | undefined): string {
   return desc === null || desc === undefined || desc === "" ? name : `${name}: ${render(desc)}`;
 }

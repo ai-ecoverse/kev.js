@@ -22,6 +22,7 @@ section { margin: 44px 0; scroll-margin-top: 16px; }
 main { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 @media (max-width: 920px) { main { grid-template-columns: 1fr; } }
 .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; } .spacer { flex: 1; }
+.chk { display: flex; align-items: center; gap: 6px; user-select: none; } .chk input { margin: 0; }
 label { font-size: 13.5px; color: var(--muted); }
 textarea { width: 100%; min-height: 460px; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: transparent; color: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
 select, button { font: inherit; font-size: 14px; padding: 5px 9px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: inherit; }
