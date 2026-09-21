@@ -26,13 +26,15 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v5
-        with: { fetch-depth: 0 }
+        with: { fetch-depth: 0, submodules: true }
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: npm }
       - run: npm ci
       - run: npm install -g npm@latest        # trusted publishing needs npm >= 11.5.1
       - run: npm run typecheck
       - run: npm run build:lib
+      # same suite as ci.yml; model tests skip without public/models. Fail here instead of publishing a red build.
+      - run: npm test
       - run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
