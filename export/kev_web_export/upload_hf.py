@@ -73,8 +73,10 @@ def main():
     ap.add_argument("--private", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
-    names = a.only.split(",") if a.only else sorted(d for d in os.listdir(a.models) if os.path.isdir(f"{a.models}/{d}"))
-    manifests = {n: json.load(open(f"{a.models}/{n}/manifest.json")) for n in names}
+    everything = sorted(d for d in os.listdir(a.models) if os.path.exists(f"{a.models}/{d}/manifest.json"))
+    names = a.only.split(",") if a.only else everything
+    # the card describes every packaged model, not just the ones this run uploads
+    manifests = {n: json.load(open(f"{a.models}/{n}/manifest.json")) for n in everything}
 
     rows = ["| Folder | Variant | Download | Base | Source checkpoint |", "|---|---|---|---|---|"]
     for n, m in manifests.items():
@@ -93,12 +95,22 @@ def main():
     api = HfApi(token=os.environ.get("HF_TOKEN"))
     api.create_repo(a.repo, repo_type="model", private=a.private, exist_ok=True)
     api.upload_file(path_or_fileobj=card.encode(), path_in_repo="README.md", repo_id=a.repo, repo_type="model")
+    remote = set(api.list_repo_files(a.repo))
     for n in names:
         files = published_files(n, manifests[n])
+        payload = [f for f in files if f != f"{n}/manifest.json"]
         print(f"uploading {n}: {len(files)} files")
-        # only what the manifest names: stray files in the folder are never published. upload_large_folder resumes
-        # and parallelises.
-        api.upload_large_folder(repo_id=a.repo, repo_type="model", folder_path=a.models, allow_patterns=files, num_workers=4)
+        # 1. the revision's files, under their r-<sha>/ directory: nothing a live manifest points at is touched.
+        #    Only what the manifest names is sent; upload_large_folder resumes and parallelises.
+        api.upload_large_folder(repo_id=a.repo, repo_type="model", folder_path=a.models, allow_patterns=payload, num_workers=4)
+        # 2. the manifest, alone: this commit is the switch to the new revision
+        api.upload_file(path_or_fileobj=f"{a.models}/{n}/manifest.json", path_in_repo=f"{n}/manifest.json", repo_id=a.repo,
+                        repo_type="model", commit_message=f"{n}: {manifests[n]['run']}")
+        # 3. whatever the new manifest no longer names (older revisions, the pre-revision flat layout)
+        stale = sorted(f for f in remote if f.startswith(f"{n}/") and f not in files)
+        if stale:
+            api.delete_files(repo_id=a.repo, repo_type="model", delete_patterns=stale, commit_message=f"{n}: drop {len(stale)} superseded files")
+            print(f"  removed {len(stale)} superseded files")
     print(f"https://huggingface.co/{a.repo}")
 
 

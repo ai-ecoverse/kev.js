@@ -96,10 +96,16 @@ const kev = await loadKev("https://huggingface.co/ai-ecoverse/kev.js/resolve/mai
   },
 });
 
-res.answers.department.choice;         // "returns"
-res.answers.department.probabilities;  // { returns: 0.47, shipping: 0.28, billing: 0.25 }
-res.answers.escalate.noul;             // 0.93   probability of yes
-res.answers.frustration.score;         // 1.44   expected level, 0-based</code></pre>
+// Kev-4B (kev-4b@4bc64c6) in Chrome:
+res.answers.department.choice;         // "shipping"
+res.answers.department.probabilities;  // { returns: 0.42, shipping: 0.43, billing: 0.15 }
+res.answers.escalate.noul;             // 0.95   probability of yes
+res.answers.frustration.score;         // 1.46   expected level, 0-based</code></pre>
+    <p>
+      The ticket is about a late delivery, a wrong size and a double charge, and the department probabilities say
+      exactly that: returns and shipping are a coin flip, billing is a real possibility. That is what you lose with a
+      single label, and why routing on <code>confidence</code> beats routing on <code>choice</code>.
+    </p>
     <table class="api">
       <thead><tr><th>Type</th><th>Criteria</th><th>Answer</th></tr></thead>
       <tbody>
@@ -124,7 +130,8 @@ res.answers.frustration.score;         // 1.44   expected level, 0-based</code><
     </table>
     <p class="note">
       Weights are int8 with fp32 activations. Browser probabilities track the full-precision model closely: on 300
-      labelled records Kev-4B scores 0.770 against 0.767, with a mean probability difference of 0.0024. int4 is not
+      labelled records Kev-4B scores 0.773, exactly the full-precision model's accuracy, with a mean probability
+      difference of 0.0028 and not one answer changed. int4 is not
       offered — it moves probabilities by 0.2–0.8 and flips answers, which defeats the point of a calibrated model.
       Timings are from an Apple M4 Max; the WASM fallback is roughly 5× slower.
     </p>

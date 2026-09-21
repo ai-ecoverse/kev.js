@@ -39,9 +39,13 @@ def main():
     ap.add_argument("--fixtures")
     a = ap.parse_args()
     kev = json.load(open(f"{a.build}/kev.json"))
-    os.makedirs(a.out, exist_ok=True)
-    for f in ("tokenizer.json", "tokenizer_config.json"): link(f"{a.build}/tokenizer/{f}", f"{a.out}/{f}")
-    link(f"{a.build}/head.safetensors", f"{a.out}/head.safetensors")
+    # Everything but the manifest lives under a revision directory, so publishing a new checkpoint never overwrites a
+    # file an older manifest points at: the switch is the single commit that replaces manifest.json.
+    rev = kev["run"].partition("@")[2][:7] or "local"
+    r = f"r-{rev}"
+    os.makedirs(f"{a.out}/{r}", exist_ok=True)
+    for f in ("tokenizer.json", "tokenizer_config.json"): link(f"{a.build}/tokenizer/{f}", f"{a.out}/{r}/{f}")
+    link(f"{a.build}/head.safetensors", f"{a.out}/{r}/head.safetensors")
     fixtures = None
     if a.fixtures:
         fx = json.load(open(a.fixtures))
@@ -52,20 +56,22 @@ def main():
     variants = {}
     for spec in a.variant:
         name, d = spec.split("=", 1)
-        os.makedirs(f"{a.out}/{name}", exist_ok=True)
-        link(f"{a.build}/{d}/model.onnx", f"{a.out}/{name}/model.onnx")
+        vdir = f"{r}/{name}"
+        os.makedirs(f"{a.out}/{vdir}", exist_ok=True)
+        link(f"{a.build}/{d}/model.onnx", f"{a.out}/{vdir}/model.onnx")
         data = sorted((f for f in os.listdir(f"{a.build}/{d}") if f.startswith("model.onnx.data")), key=lambda f: (len(f), f))
-        for f in data: link(f"{a.build}/{d}/{f}", f"{a.out}/{name}/{f}")
-        inputs, outputs = io_info(f"{a.out}/{name}/model.onnx")
-        v = {"model": f"{name}/model.onnx", "data": [f"{name}/{f}" for f in data],
-             "bytes": sum(os.path.getsize(f"{a.out}/{name}/{f}") for f in ["model.onnx", *data]),
+        for f in data: link(f"{a.build}/{d}/{f}", f"{a.out}/{vdir}/{f}")
+        inputs, outputs = io_info(f"{a.out}/{vdir}/model.onnx")
+        v = {"model": f"{vdir}/model.onnx", "data": [f"{vdir}/{f}" for f in data],
+             "bytes": sum(os.path.getsize(f"{a.out}/{vdir}/{f}") for f in ["model.onnx", *data]),
              "io_dtype": next(o["type"] for o in outputs if o["name"] == "hidden_states"),
-             "sizes": {**{f"{name}/{f}": os.path.getsize(f"{a.out}/{name}/{f}") for f in ["model.onnx", *data]},
-                       "head.safetensors": os.path.getsize(f"{a.out}/head.safetensors")},
+             "sizes": {**{f"{vdir}/{f}": os.path.getsize(f"{a.out}/{vdir}/{f}") for f in ["model.onnx", *data]},
+                       f"{r}/head.safetensors": os.path.getsize(f"{a.out}/{r}/head.safetensors"),
+                       **{f"{r}/{f}": os.path.getsize(f"{a.out}/{r}/{f}") for f in ("tokenizer.json", "tokenizer_config.json")}},
              "inputs": inputs, "outputs": outputs}
         if fixtures:
             import numpy as np
-            rt = OrtKev(f"{a.out}/{name}/model.onnx", f"{a.out}/head.safetensors")
+            rt = OrtKev(f"{a.out}/{vdir}/model.onnx", f"{a.out}/{r}/head.safetensors")
             worst, flips, n = 0.0, 0, 0
             for f in fixtures:
                 for g, ref in zip(rt.probs(f["encoding"]), f["probs"]):
@@ -74,7 +80,7 @@ def main():
             print(name, v["parity"])
         variants[name] = v
     # drop files from earlier packagings (removed variants, old shard layouts): the directory is published as is
-    keep = {"manifest.json", "tokenizer.json", "tokenizer_config.json", "head.safetensors"}
+    keep = {"manifest.json", f"{r}/tokenizer.json", f"{r}/tokenizer_config.json", f"{r}/head.safetensors"}
     for v in variants.values(): keep |= {v["model"], *v["data"]}
     for root, _, fs in os.walk(a.out, topdown=False):
         for f in fs:
@@ -82,7 +88,8 @@ def main():
             if rel not in keep: os.remove(os.path.join(root, f)); print("removed stale", rel)
         if root != a.out and not os.listdir(root): os.rmdir(root)
     manifest = {"name": os.path.basename(os.path.normpath(a.out)), **{k: kev[k] for k in ("run", "base", "hidden_size", "head_dim", "special", "max_state", "max_branch")},
-                "files": {"head": "head.safetensors", "tokenizer": "tokenizer.json", "tokenizer_config": "tokenizer_config.json"}, "variants": variants}
+                "files": {"head": f"{r}/head.safetensors", "tokenizer": f"{r}/tokenizer.json", "tokenizer_config": f"{r}/tokenizer_config.json"},
+                "variants": variants}
     json.dump(manifest, open(f"{a.out}/manifest.json", "w"), indent=2)
     print(f"{a.out}/manifest.json: {', '.join(f'{k} {v['bytes'] / 1e6:.0f} MB' for k, v in variants.items())}")
 

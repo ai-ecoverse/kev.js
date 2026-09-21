@@ -211,8 +211,8 @@ document.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.
 
 /** Published numbers for the models table; measured on an M4 Max (see the repo README). */
 const MODEL_FACTS: Record<string, { size: string; acc: string; ms: string }> = {
-  "kev-0.8b": { size: "822 MB", acc: "0.657 / 0.488", ms: "112 ms" },
-  "kev-4b": { size: "4.7 GB", acc: "0.770 / 0.339", ms: "364 ms" },
+  "kev-0.8b": { size: "822 MB", acc: "0.660 / 0.475", ms: "108 ms" },
+  "kev-4b": { size: "4.7 GB", acc: "0.773 / 0.324", ms: "360 ms" },
   "kev-9b": { size: "—", acc: "—", ms: "—" },
 };
 const table = document.getElementById("model-table");

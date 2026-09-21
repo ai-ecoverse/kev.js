@@ -43,14 +43,17 @@ async function fetchText(url: string, attempts = 4): Promise<string> {
 /** The tokenizer the bundle ships: the local bundle or build output when present, else the published copy on Hugging
  * Face (cached in the OS temp dir), so CI can run the encoding tests without weights. */
 export async function tokenizer(): Promise<Tokenizer> {
-  const local = [modelDir, `${root}/export/build/${model}/tokenizer`].find((d) => existsSync(`${d}/tokenizer.json`));
-  const read = async (f: string) => {
-    if (local) return readFileSync(`${local}/${f}`, "utf8");
-    const cached = join(tmpdir(), `kev-js-${model}-${f}`);
-    if (!existsSync(cached)) {
-      writeFileSync(cached, await fetchText(`${HF}/${model}/${f}`));
-    }
+  // follow the manifest: files live under a revision directory (r-<sha>/)
+  const read = async (f: "tokenizer" | "tokenizer_config") => {
+    const localManifest = `${modelDir}/manifest.json`;
+    if (existsSync(localManifest)) return readFileSync(`${modelDir}/${JSON.parse(readFileSync(localManifest, "utf8")).files[f]}`, "utf8");
+    const build = `${root}/export/build/${model}/tokenizer/${f}.json`;
+    if (existsSync(build)) return readFileSync(build, "utf8");
+    const manifest = JSON.parse(await fetchText(`${HF}/${model}/manifest.json`));
+    const path = manifest.files[f] as string;
+    const cached = join(tmpdir(), `kev-js-${model}-${path.replaceAll("/", "_")}`);   // path carries the revision
+    if (!existsSync(cached)) writeFileSync(cached, await fetchText(`${HF}/${model}/${path}`));
     return readFileSync(cached, "utf8");
   };
-  return new Tokenizer(JSON.parse(await read("tokenizer.json")), JSON.parse(await read("tokenizer_config.json")));
+  return new Tokenizer(JSON.parse(await read("tokenizer")), JSON.parse(await read("tokenizer_config")));
 }

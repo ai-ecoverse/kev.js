@@ -26,42 +26,34 @@ res.answers.urgency.score;   // 1.79
 
 ## Results
 
-Measured in Chrome on an Apple M4 Max (WebGPU on Metal).
+Measured in Chrome on an Apple M4 Max (WebGPU on Metal), against the fp32 PyTorch model (`kev.evaluate.load`) at the
+same commit. Each fp32 ONNX export matches PyTorch to 1e-4 or better, so the 300-record comparisons use it as the
+reference. The 300 records are held-out transfer-v4 development data (sources Kev was not trained on).
 
-### Kev-4B
-
-`jaredpalmer/kev-4b`, variant `q8f32`: int8 weights with fp32 activations, a 4.7 GB download.
-
-| | Browser (WebGPU) | Reference (fp32) |
-|---|---|---|
-| Accuracy on 300 transfer-v4 dev records | 0.770 | 0.767 |
-| Brier score | 0.339 | 0.340 |
-| Max / mean \|Δp\| on the 300 records | 0.032 / 0.0024 | – |
-| Max \|Δp\| on 29 fixture questions (vs PyTorch) | 0.012, no argmax flips | – |
-| 3-question request | 364 ms (267 ms with the state cached) | Kev's PyTorch server: 779 ms on an M5 |
-
-On the README ticket it answers returns 0.47, shipping 0.28, billing 0.25, the same as Kev-4B's published example.
-int4 (2.3–2.5 GB) is not usable at 4B either: max \|Δp\| 0.31–0.37 and 3 of 29 argmaxes flipped.
-
-### Kev-0.8B
-
-`jaredpalmer/kev-0.8b`. Reference: the fp32 PyTorch model
-(`kev.evaluate.load`). The fp32 ONNX export matches it to 3e-5, so the 300-record comparison uses the fp32 export
-as the reference.
-
-| Variant | Download | Weights / activations | Max \|Δp\|, 49 fixture questions | 300 transfer-v4 dev records: accuracy / Brier (reference 0.660 / 0.487) | Argmax flips | Latency, 3-question request |
+| Model (pinned checkpoint) | Download | Accuracy, browser / reference | Brier, browser / reference | Mean / max \|Δp\| (300 records) | Answers changed | 3-question request |
 |---|---|---|---|---|---|---|
-| **`q8f32`** (default) | 822 MB | int8 / fp32 | 0.030 | 0.657 / 0.488 | 1 / 300 | 112 ms (83 ms with the state cached) |
-| `q8` | 788 MB | int8 / fp16 | 0.040 | 0.663 / 0.488 | 1 / 300 | 116 ms |
-| `fp16` | 1.5 GB | fp16 / fp16 | 0.159 | 0.663 / 0.486 | 1 / 300 | 128 ms |
-| `q8f32`, WASM (CPU) | 822 MB | int8 / fp32 | 0.030 | 0.657 / 0.488 | 1 / 300 | ≈ 500 ms per record |
+| Kev-0.8B `q8f32` (`kev-0.8b@2256796`) | 822 MB | 0.660 / 0.657 | 0.475 / 0.472 | 0.0063 / 0.085 | 3 / 300 | 108 ms |
+| Kev-0.8B `q8` (int8, fp16 activations) | 788 MB | 0.663 / 0.657 | 0.476 / 0.472 | 0.0073 / 0.087 | 4 / 300 | 115 ms |
+| Kev-4B `q8f32` (`kev-4b@4bc64c6`) | 4.7 GB | 0.773 / 0.773 | 0.324 / 0.324 | 0.0028 / 0.075 | 0 / 300 | 360 ms |
+| Kev-9B `q8f32` (`kev-9b@442e597`) | 8.8 GB | pending | | | | |
 
-For comparison, Kev's own PyTorch server takes 329 ms for Kev-0.8B on an M5 (MPS, no fast DeltaNet kernels). The
-largest deviations come from near-ties, for example an MMLU item whose reference top probability is 0.499.
+Kev's own PyTorch server takes 329 ms (Kev-0.8B) and 779 ms (Kev-4B) for a comparable request on an M5 with MPS,
+which has no fast DeltaNet kernels. The WASM (CPU) fallback is roughly 5× slower than WebGPU. The largest
+deviations come from near-ties, where the reference itself is split close to 50/50.
 
-int4 is not usable at 0.8B either. Round-to-nearest, k-quant, block size 16, and int8 for the linear-attention layers all
-move probabilities by 0.24–0.78 and flip 1–8 of 49 argmaxes, including with fp16 embeddings. See
-`export/build.sh` for the variants that were tried.
+`q8f32` (int8 weights, fp32 activations) is the default everywhere. int4 is not usable: at 0.8B, round-to-nearest,
+k-quant, block size 16, and int8 for the linear-attention layers all moved probabilities by 0.24–0.78 and flipped
+1–8 of 49 answers, and at 4B int4 moved them by 0.31–0.37 with 3 of 29 flipped. For a model whose output is a
+calibrated probability that is disqualifying. `export/build.sh` lists the variants that were tried.
+
+### Checkpoint revisions
+
+Kev's checkpoints are republished under the same Hub ids (all three were updated on 2026-09-21), so everything
+here is pinned to a commit. `kev_web_export.pin` resolves `jaredpalmer/kev-4b` to `jaredpalmer/kev-4b@<sha>`. The
+merge, the fixtures and the reference sets record it, and `package.py` refuses to combine fixtures and weights
+from different commits. Each bundle's `manifest.json` names its revision (`run`), and its files live under
+`r-<sha>/`. Publishing a new checkpoint therefore never overwrites a file an older manifest points at: the switch is
+the single commit that replaces `manifest.json`, and browsers key their cache by that revision.
 
 ## How It Works
 
