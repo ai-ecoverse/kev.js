@@ -8,7 +8,7 @@ const isolation = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-E
 export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
   publicDir: fileURLToPath(new URL("../dist", import.meta.url)),
-  server: { headers: isolation, host: "127.0.0.1", port: 5173 },
+  server: { headers: isolation, host: "127.0.0.1", port: 5173, allowedHosts: [".getbb.app"] },   // bb connect exposes the dev server over https
   preview: { headers: isolation, host: "127.0.0.1", port: 4173 },
   optimizeDeps: { exclude: ["onnxruntime-web"] },
   worker: { format: "es" },
