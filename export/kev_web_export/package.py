@@ -67,6 +67,14 @@ def main():
             v["parity"] = {"max_abs_dp": round(worst, 6), "argmax_flips": flips, "questions": n}
             print(name, v["parity"])
         variants[name] = v
+    # drop files from earlier packagings (removed variants, old shard layouts): the directory is published as is
+    keep = {"manifest.json", "tokenizer.json", "tokenizer_config.json", "head.safetensors"}
+    for v in variants.values(): keep |= {v["model"], *v["data"]}
+    for root, _, fs in os.walk(a.out, topdown=False):
+        for f in fs:
+            rel = os.path.relpath(os.path.join(root, f), a.out)
+            if rel not in keep: os.remove(os.path.join(root, f)); print("removed stale", rel)
+        if root != a.out and not os.listdir(root): os.rmdir(root)
     manifest = {"name": os.path.basename(os.path.normpath(a.out)), **{k: kev[k] for k in ("run", "base", "hidden_size", "head_dim", "special", "max_state", "max_branch")},
                 "files": {"head": "head.safetensors", "tokenizer": "tokenizer.json", "tokenizer_config": "tokenizer_config.json"}, "variants": variants}
     json.dump(manifest, open(f"{a.out}/manifest.json", "w"), indent=2)

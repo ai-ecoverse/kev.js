@@ -11,7 +11,8 @@ CARD = """---
 license: apache-2.0
 library_name: kev.js
 pipeline_tag: text-classification
-base_model: {bases}
+base_model:
+{bases}
 tags: [kev, decision-model, onnx, onnxruntime-web, webgpu, quantized, int8]
 ---
 
@@ -54,6 +55,16 @@ the original fp32 PyTorch model on a fixture set.
 """
 
 
+def published_files(name, manifest):
+    """Repo paths of one model's download: manifest, tokenizer, head and every non-fp32 variant's files. fp32 is the
+    local parity reference, 3 GB+, and not meant for browsers."""
+    f = manifest["files"]
+    paths = ["manifest.json", f["head"], f["tokenizer"], f["tokenizer_config"]]
+    for v, meta in manifest["variants"].items():
+        if v != "fp32": paths += [meta["model"], *meta["data"]]
+    return [f"{name}/{p}" for p in paths]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--models", default="../public/models")
@@ -71,11 +82,10 @@ def main():
             if v == "fp32": continue
             rows.append(f"| `{n}` | `{v}` | {meta['bytes'] / 1e9:.2f} GB | `{m['base']}` | `{m['run']}` |")
     card = CARD.format(repo=a.repo, table="\n".join(rows),
-                       bases=", ".join(sorted({m["base"] for m in manifests.values()})),
+                       bases="\n".join(f"- {b}" for b in sorted({m["base"] for m in manifests.values()})),
                        runs=", ".join(f"`{m['run']}`" for m in manifests.values()))
 
-    total = sum(os.path.getsize(os.path.join(r, f)) for n in names for r, _, fs in os.walk(f"{a.models}/{n}")
-                for f in fs if "/fp32" not in r)   # fp32 stays local: it is the parity reference, not a download
+    total = sum(os.path.getsize(f"{a.models}/{p}") for n in names for p in published_files(n, manifests[n]))
     print(f"{a.repo}: {', '.join(names)} ({total / 1e9:.1f} GB)")
     if a.dry_run:
         print(card)
@@ -84,10 +94,11 @@ def main():
     api.create_repo(a.repo, repo_type="model", private=a.private, exist_ok=True)
     api.upload_file(path_or_fileobj=card.encode(), path_in_repo="README.md", repo_id=a.repo, repo_type="model")
     for n in names:
-        print(f"uploading {n}…")
-        # upload_large_folder resumes and parallelises; fp32 is a local parity reference, not for download
-        api.upload_large_folder(repo_id=a.repo, repo_type="model", folder_path=a.models,
-                                allow_patterns=[f"{n}/**"], ignore_patterns=["*/fp32/*"], num_workers=4)
+        files = published_files(n, manifests[n])
+        print(f"uploading {n}: {len(files)} files")
+        # only what the manifest names: stray files in the folder are never published. upload_large_folder resumes
+        # and parallelises.
+        api.upload_large_folder(repo_id=a.repo, repo_type="model", folder_path=a.models, allow_patterns=files, num_workers=4)
     print(f"https://huggingface.co/{a.repo}")
 
 
