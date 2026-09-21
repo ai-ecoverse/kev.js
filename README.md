@@ -20,8 +20,9 @@ const res = await kev.systemOne({
     urgency: { type: "score", instructions: "How urgent is this ticket?", criteria: ["can wait", "this week", "today"] },
   },
 });
-res.answers.billing.noul;    // 0.99
-res.answers.urgency.score;   // 1.79
+// Kev-0.8B (kev-0.8b@2256796):
+res.answers.billing.noul;    // 1.0    probability of yes, rounded to 2 places like kev.serve
+res.answers.urgency.score;   // 1.77   expected level: mostly "today"
 ```
 
 ## Results
