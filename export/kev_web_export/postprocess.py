@@ -5,7 +5,7 @@
   standard ops (Gather, Cast, Mul), so every execution provider can run it.
 - The rotary cos/sin caches are sized for the base model's 262k context. Kev never sees more than a few thousand
   positions (8,192 tokens per state + question at serving time), so --rope-positions trims them."""
-import argparse, os
+import argparse, os, shutil
 import numpy as np
 import onnx
 from onnx import helper, numpy_helper, TensorProto
@@ -67,6 +67,9 @@ def main():
         for k, n in enumerate(new_nodes): g.node.insert(i + k, n)
         print(f"embedding -> int8 per-row in {len(cast_outputs)} column slices (max abs error {err:.2e})")
 
+    os.makedirs(a.out, exist_ok=True)
+    for f in os.listdir(a.src):
+        if f.endswith((".json", ".jinja")): shutil.copy(f"{a.src}/{f}", a.out)
     for f in os.listdir(a.out):
         if f.startswith("model.onnx.data"): os.remove(f"{a.out}/{f}")
     files = save_sharded(m, a.out, a.shard_mb * 1_000_000)
