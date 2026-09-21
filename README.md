@@ -26,11 +26,11 @@ res.answers.urgency.score;   // 1.79
 
 ## Results
 
-Both Kev models run in headless Chrome 153 on an Apple M4 Max (WebGPU on Metal).
+Measured in Chrome on an Apple M4 Max (WebGPU on Metal).
 
 ### Kev-4B
 
-`jaredpalmer/kev-4b`, variant `q8f32`: int8 weights with fp32 activations, a 4.7 GB download in three shards.
+`jaredpalmer/kev-4b`, variant `q8f32`: int8 weights with fp32 activations, a 4.7 GB download.
 
 | | Browser (WebGPU) | Reference (fp32) |
 |---|---|---|
@@ -84,7 +84,9 @@ with no custom attention mask:
    embedding table (0.5 GB fp16 for 0.8B, 2.5 GB fp32 for 4B) becomes int8 with one scale per row, using plain
    `Gather`/`Cast`/`Mul`. The rotary caches are trimmed from 262k positions to 8,192, which is `kev.serve`'s limit.
    External weights are split into files of at most 32 MB (`--shard-mb`): proxies and CDNs cap response bodies (bb
-   connect cuts one at 34.5 MiB), a failed file is cheap to retry, and browsers cap a single buffer near 2 GB. An
+   connect cuts one at 34.5 MiB), a failed file is cheap to retry, and browsers cap a single buffer near 2 GB. A
+   single tensor larger than that keeps its own file — Kev-9B's MLP matrices are 50 MB each — which Hugging Face
+   serves fine but a capped proxy would not. An
    embedding table is one tensor of hundreds of MB and an ONNX initializer cannot span files, so it is stored as
    column slices that are gathered separately and concatenated — bit-identical, and every file stays small.
 4. **Package** (`kev_web_export.package`): `manifest.json` (I/O names, empty-cache shapes, parity), tokenizer,
@@ -100,7 +102,7 @@ every question, and by later requests with the same state (LRU of 4, as in `kev.
 You need Python 3.12 with [uv](https://docs.astral.sh/uv/), Node 20+, and about 20 GB of disk for Kev-0.8B.
 
 ```bash
-git clone --recursive <this repo> && cd kev-web
+git clone --recursive https://github.com/ai-ecoverse/kev.js && cd kev.js
 cd export && uv sync
 uv run python -m kev_web_export.merge --run jaredpalmer/kev-0.8b --out build/kev-0.8b
 ./build.sh build/kev-0.8b fp32-cpu q8f32-webgpu q8f16-webgpu fp16-webgpu
