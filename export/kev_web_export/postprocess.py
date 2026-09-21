@@ -17,7 +17,10 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--embed", choices=["keep", "int8"], default="int8")
     ap.add_argument("--rope-positions", type=int, default=8192)
-    ap.add_argument("--shard-mb", type=int, default=1900, help="max size of one external-data file (browsers cap single buffers near 2 GB)")
+    ap.add_argument("--shard-mb", type=int, default=32,
+                    help="max size of one external-data file. Small shards keep every request well inside proxy and "
+                         "CDN response caps (bb connect cuts a response at 34.5 MiB) and make a failed download cheap "
+                         "to retry; browsers also cap a single buffer near 2 GB")
     a = ap.parse_args()
     m = onnx.load(f"{a.src}/model.onnx", load_external_data=True)
     g = m.graph
@@ -36,23 +39,34 @@ def main():
         q = np.clip(np.rint(wf / scale[:, None]), -127, 127).astype(np.int8)
         err = float(np.abs(q.astype(np.float32) * scale[:, None] - wf).max())
         g.initializer.remove(inits["model.embed_tokens.weight"])
-        g.initializer.extend([numpy_helper.from_array(q, "model.embed_tokens.weight_Q8"),
-                              numpy_helper.from_array(scale.astype(w.dtype), "model.embed_tokens.weight_scales")])
+
+        # One initializer per hidden-dimension slice: an embedding table is a single tensor of hundreds of MB, and an
+        # ONNX initializer cannot be split across external-data files. Slicing the columns keeps every file small while
+        # the result is bit-identical: each slice is gathered with the same ids and the outputs are concatenated.
+        vocab, hidden = q.shape
+        slices = max(1, -(-q.nbytes // (a.shard_mb * 1_000_000)))
+        width = -(-hidden // slices)
         out, ids, p = node.output[0], node.input[1], "/model/embed_tokens"
         io = helper.np_dtype_to_tensor_dtype(w.dtype)
-        new = [helper.make_node("Gather", ["model.embed_tokens.weight_Q8", ids], [f"{p}/GatherQ8/output_0"], name=f"{p}/GatherQ8"),
-               helper.make_node("Cast", [f"{p}/GatherQ8/output_0"], [f"{p}/CastQ8/output_0"], name=f"{p}/CastQ8", to=io),
-               helper.make_node("Gather", ["model.embed_tokens.weight_scales", ids], [f"{p}/GatherScale/output_0"], name=f"{p}/GatherScale"),
-               helper.make_node("Unsqueeze", [f"{p}/GatherScale/output_0", f"{p}/axes_last"], [f"{p}/Unsqueeze/output_0"], name=f"{p}/Unsqueeze"),
-               helper.make_node("Mul", [f"{p}/CastQ8/output_0", f"{p}/Unsqueeze/output_0"], [out], name=f"{p}/MulScale")]
+        new_nodes, cast_outputs = [], []
+        for k, start in enumerate(range(0, hidden, width)):
+            part = np.ascontiguousarray(q[:, start : start + width])
+            g.initializer.append(numpy_helper.from_array(part, f"model.embed_tokens.weight_Q8_{k}"))
+            new_nodes += [helper.make_node("Gather", [f"model.embed_tokens.weight_Q8_{k}", ids], [f"{p}/GatherQ8_{k}/output_0"], name=f"{p}/GatherQ8_{k}"),
+                          helper.make_node("Cast", [f"{p}/GatherQ8_{k}/output_0"], [f"{p}/CastQ8_{k}/output_0"], name=f"{p}/CastQ8_{k}", to=io)]
+            cast_outputs.append(f"{p}/CastQ8_{k}/output_0")
+        g.initializer.append(numpy_helper.from_array(scale.astype(w.dtype), "model.embed_tokens.weight_scales"))
+        joined = cast_outputs[0] if len(cast_outputs) == 1 else f"{p}/Concat/output_0"
+        if len(cast_outputs) > 1:
+            new_nodes.append(helper.make_node("Concat", cast_outputs, [joined], name=f"{p}/Concat", axis=-1))
+        new_nodes += [helper.make_node("Gather", ["model.embed_tokens.weight_scales", ids], [f"{p}/GatherScale/output_0"], name=f"{p}/GatherScale"),
+                      helper.make_node("Unsqueeze", [f"{p}/GatherScale/output_0", f"{p}/axes_last"], [f"{p}/Unsqueeze/output_0"], name=f"{p}/Unsqueeze"),
+                      helper.make_node("Mul", [joined, f"{p}/Unsqueeze/output_0"], [out], name=f"{p}/MulScale")]
         g.initializer.append(numpy_helper.from_array(np.array([-1], np.int64), f"{p}/axes_last"))
         i = list(g.node).index(node); g.node.remove(node)
-        for k, n in enumerate(new): g.node.insert(i + k, n)
-        print(f"embedding -> int8 per-row (max abs error {err:.2e})")
+        for k, n in enumerate(new_nodes): g.node.insert(i + k, n)
+        print(f"embedding -> int8 per-row in {len(cast_outputs)} column slices (max abs error {err:.2e})")
 
-    os.makedirs(a.out, exist_ok=True)
-    for f in os.listdir(a.src):
-        if f.endswith((".json", ".jinja")): os.system(f"cp '{a.src}/{f}' '{a.out}/'")
     for f in os.listdir(a.out):
         if f.startswith("model.onnx.data"): os.remove(f"{a.out}/{f}")
     files = save_sharded(m, a.out, a.shard_mb * 1_000_000)

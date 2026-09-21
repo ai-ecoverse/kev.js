@@ -9,11 +9,18 @@ main { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; } @media (max-w
 textarea { width: 100%; box-sizing: border-box; min-height: 480px; font: 12.5px/1.5 ui-monospace, monospace; background: transparent; color: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
 select, button { font: inherit; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: inherit; }
 button { cursor: pointer; } button:not(:disabled):hover { border-color: var(--accent); } button:disabled { opacity: .5; cursor: default; }
-#progress { width: 200px; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; } #bar { height: 100%; width: 0; background: var(--accent); }
+#progress { width: 200px; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+#bar { height: 100%; width: 0; background: var(--accent); transition: width .25s ease-out; }
+#progress.active #bar::after { content: ""; display: block; height: 100%; animation: pulse 1.2s ease-in-out infinite; background: linear-gradient(90deg, transparent, rgba(255,255,255,.45), transparent); }
+@keyframes pulse { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
 #status { margin: 0; color: var(--muted); flex-basis: 100%; }
 .q { margin-bottom: 18px; } .q h3 { margin: 0 0 6px; font-size: 14px; } .q h3 small { color: var(--muted); font-weight: 400; margin-left: 6px; }
 .opt { display: grid; grid-template-columns: 140px 1fr 48px; gap: 8px; align-items: center; margin: 3px 0; font-size: 13px; }
-.opt .track { display: block; height: 14px; background: var(--line); border-radius: 3px; overflow: hidden; } .opt .fill { display: block; height: 100%; background: var(--bar); }
+.opt .fill { transition: width .3s ease-out; }
+.q.pending { opacity: .45; } .q.pending h3 small { font-style: italic; }
+#answers { min-height: 420px; }
+body.busy #run, body.busy #separate, body.busy #load { cursor: progress; }
+.opt .track { display: block; height: 14px; background: var(--line); border-radius: 3px; overflow: hidden; } .opt .fill { display: block; height: 100%; width: 0; background: var(--bar); }
 .opt.top .fill { background: var(--accent); } .opt.top .name { font-weight: 600; }
 .opt .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .opt .val { text-align: right; font-variant-numeric: tabular-nums; }
 .meta { color: var(--muted); font-size: 12px; margin-bottom: 12px; } .muted { color: var(--muted); } .err { color: #d33; white-space: pre-wrap; }

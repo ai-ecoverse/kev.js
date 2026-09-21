@@ -65,7 +65,10 @@ with no custom attention mask:
 3. **Post-process** (`kev_web_export.postprocess`): the builder can only quantize embeddings to int4. The
    embedding table (0.5 GB fp16 for 0.8B, 2.5 GB fp32 for 4B) becomes int8 with one scale per row, using plain
    `Gather`/`Cast`/`Mul`. The rotary caches are trimmed from 262k positions to 8,192, which is `kev.serve`'s limit.
-   External weights are split into files of at most 1.9 GB, because browsers cap single buffers near 2 GB.
+   External weights are split into files of at most 32 MB (`--shard-mb`): proxies and CDNs cap response bodies (bb
+   connect cuts one at 34.5 MiB), a failed file is cheap to retry, and browsers cap a single buffer near 2 GB. An
+   embedding table is one tensor of hundreds of MB and an ONNX initializer cannot span files, so it is stored as
+   column slices that are gathered separately and concatenated — bit-identical, and every file stays small.
 4. **Package** (`kev_web_export.package`): `manifest.json` (I/O names, empty-cache shapes, parity), tokenizer,
    head and one directory per variant.
 
@@ -115,6 +118,7 @@ const res = await kev.systemOne({
 // res.answers.billing.noul, res.answers.urgency.score, res.usage, res.latency_ms
 ```
 
+`kev.systemOne(req, { onAnswer })` reports each question as it finishes, so a UI can fill answers in as they land.
 `kev.systemOneSeparate()` answers each question in its own pass. `kev.probs(record)` returns raw probabilities.
 Weight files are cached in Cache Storage (`kev-web-v1`). In the demo page, `window.kev.systemOne(...)` works from
 the console, and `?verbose` logs where onnxruntime placed each node.
@@ -129,6 +133,10 @@ cd export && uv run python -m kev_web_export.parity --model build/kev-0.8b/web-q
     --head build/kev-0.8b/head.safetensors --fixtures ../fixtures/kev-0.8b.json
 ```
 
+`scripts/cdp.mjs` drives a page in a Chrome started with `--remote-debugging-port=9222`, for checking the demo in a
+real browser: `node scripts/cdp.mjs '<expression>'` evaluates in the tab (`MATCH=` picks it by URL), and
+`node scripts/cdp.mjs --shot out.png` screenshots it.
+
 - `fixtures/kev-0.8b.json`: 43 records (3 hand-written, including structured state and delimiter injection, plus
   40 from transfer-v4 dev) with the rendered record, Kev's token encoding and the PyTorch probabilities.
   Regenerate with `kev_web_export.fixtures`.
@@ -141,7 +149,10 @@ cd export && uv run python -m kev_web_export.parity --model build/kev-0.8b/web-q
 - JSON parsing loses two things Kev's Python server keeps. `1.0` arrives as `1` and is rendered `1`, where Python
   renders `1.0`. Object keys that look like integers (`"10"`, `"2"`) are iterated in numeric order, which can
   reorder Choice options with numeric names.
-- The first load downloads 822 MB for Kev-0.8B, or 4.7 GB for Kev-4B, and the files stay in Cache Storage.
+- The first load downloads 822 MB for Kev-0.8B, or 4.7 GB for Kev-4B, and the files stay in Cache Storage. Serve
+  them from a fast origin: over a tunnel at ~1.2 MB/s, Kev-0.8B takes 11 minutes. More parallel requests do not
+  help on a bandwidth-limited link (measured: 1.2 MB/s with one stream, 0.75 MB/s across six), so the loader
+  fetches 2 files at a time.
   Kev-4B needs a GPU with enough memory for about 4.5 GB of weights. Only Chrome was tested; Safari and Firefox
   WebGPU are untested.
 - Kev-9B is not packaged. At int8 it would be about 10 GB.

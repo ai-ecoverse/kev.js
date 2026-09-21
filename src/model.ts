@@ -4,7 +4,7 @@
 
 import type { InferenceSession, Tensor, TypedTensor } from "onnxruntime-common";
 import { Tokenizer } from "@huggingface/tokenizers";
-import { pyJsonDumps, toAnswers, toRecord, validate, type DecisionRecord, type SystemOneRequest, type SystemOneResponse } from "./api.ts";
+import { pyJsonDumps, toAnswers, toRecord, validate, type Answer, type DecisionRecord, type SystemOneRequest, type SystemOneResponse } from "./api.ts";
 import { encode, type Encoding, type EncodeOptions, type SpecialTokens } from "./encode.ts";
 import { PointerHead } from "./head.ts";
 
@@ -154,8 +154,8 @@ export class Kev {
     for (const t of s.past.values()) (t as Tensor & { dispose?: () => void }).dispose?.();
   }
 
-  /** Per-question probabilities for an encoded request. */
-  probsEncoded(enc: Encoding): Promise<number[][]> {
+  /** Per-question probabilities for an encoded request. onQuestion fires as each question finishes. */
+  probsEncoded(enc: Encoding, onQuestion?: (index: number, probs: number[]) => void): Promise<number[][]> {
     return this.serial(async () => {
       const key = enc.state.join(",");
       let st = this.cache.get(key);
@@ -164,11 +164,12 @@ export class Kev {
       const d = this.manifest.hidden_size;
       const probs: number[][] = [];
       try {
-        for (const b of enc.branches) {
+        for (const [i, b] of enc.branches.entries()) {
           const out = await this.session.run(this.feeds(b.ids, b.pos, st.past, st.len), ["hidden_states"]);
           const h = toFloat32(out.hidden_states as TypedTensor<"float32">);
           const row = (i: number) => h.subarray(i * d, (i + 1) * d);
-          probs.push(this.head.probs(row(b.decide), b.opts.map(row), this.opts.temperature));
+          const p = this.head.probs(row(b.decide), b.opts.map(row), this.opts.temperature);
+          probs.push(p); onQuestion?.(i, p);
         }
       } finally {
         if (this.opts.stateCacheSize > 0) {
@@ -187,13 +188,16 @@ export class Kev {
     return this.probsEncoded(this.encode(rec));
   }
 
-  /** POST /v1/systemone. */
-  async systemOne(input: SystemOneRequest | unknown): Promise<SystemOneResponse> {
+  /** POST /v1/systemone. onAnswer fires per question, so a caller can show answers as they land. */
+  async systemOne(input: SystemOneRequest | unknown, opts: { onAnswer?: (id: string, answer: Answer, index: number) => void } = {}): Promise<SystemOneResponse> {
     const req = validate(input);
     const { record, meta } = toRecord(req);
     const enc = this.encode(record);
     const t0 = performance.now();
-    const probs = await this.probsEncoded(enc);
+    const probs = await this.probsEncoded(enc, opts.onAnswer && ((i, p) => {
+      const m = meta[i];
+      opts.onAnswer!(m.id, toAnswers([p], [m])[m.id], i);
+    }));
     const latency = performance.now() - t0;
     const answers = toAnswers(probs, meta);
     const outputTokens = this.tokenizer.encode(pyJsonDumps(answers), { add_special_tokens: false }).ids.length;

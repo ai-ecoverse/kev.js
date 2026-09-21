@@ -13,7 +13,9 @@ export type WorkerRequest =
 
 export type WorkerResponse =
   | { type: "progress"; file: string; loaded: number; total: number }
+  | { type: "phase"; phase: "manifest" | "download" | "session" | "warmup" }
   | { type: "ready"; variant: string; device: string; loadMs: number; warmupMs: number }
+  | { type: "partial"; id: number; qid: string; answer: unknown; index: number }
   | { type: "result"; id: number; response: unknown }
   | { type: "error"; id?: number; message: string };
 
@@ -30,9 +32,11 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
       kev = await loadKev(m.baseUrl, {
         ort: ort as unknown as OrtModule, variant: m.variant, executionProviders: [m.device],
         onProgress: (p) => post({ type: "progress", ...p }),
+        onPhase: (phase) => { if (phase !== "ready") post({ type: "phase", phase }); },
         ...(m.verbose ? { sessionOptions: { logSeverityLevel: 0 as const, logVerbosityLevel: 0 } } : {}),
       });
       const t1 = performance.now();
+      post({ type: "phase", phase: "warmup" });
       await kev.systemOne({ state: "warm up", questions: { q: { type: "noul", instructions: "Is this a warm-up?" } } });   // compiles the shaders
       kev.clearCache();
       post({ type: "ready", variant: m.variant, device: m.device, loadMs: t1 - t0, warmupMs: performance.now() - t1 });
@@ -40,7 +44,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
       if (!kev) throw new Error("model not loaded");
       const response = m.mode === "separate" ? await kev.systemOneSeparate(m.request)
         : m.mode === "probs" ? await kev.probs(m.request as DecisionRecord)   // raw probabilities for a rendered record (parity checks)
-        : await kev.systemOne(m.request);
+        : await kev.systemOne(m.request, { onAnswer: (qid, answer, index) => post({ type: "partial", id: m.id, qid, answer, index }) });
       post({ type: "result", id: m.id, response });
     }
   } catch (err) {

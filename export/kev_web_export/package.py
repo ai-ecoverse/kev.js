@@ -54,7 +54,8 @@ def main():
         v = {"model": f"{name}/model.onnx", "data": [f"{name}/{f}" for f in data],
              "bytes": sum(os.path.getsize(f"{a.out}/{name}/{f}") for f in ["model.onnx", *data]),
              "io_dtype": next(o["type"] for o in outputs if o["name"] == "hidden_states"),
-             "sizes": {f"{name}/{f}": os.path.getsize(f"{a.out}/{name}/{f}") for f in ["model.onnx", *data]},
+             "sizes": {**{f"{name}/{f}": os.path.getsize(f"{a.out}/{name}/{f}") for f in ["model.onnx", *data]},
+                       "head.safetensors": os.path.getsize(f"{a.out}/head.safetensors")},
              "inputs": inputs, "outputs": outputs}
         if fixtures:
             import numpy as np
