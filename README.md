@@ -130,7 +130,10 @@ npm run build:demo                                                              
 ```
 
 `.github/workflows` builds the homepage to GitHub Pages on every push to `main`, runs the tests that need no
-weights, and publishes the npm package from a `v*` tag with trusted publishing (OIDC, no token). The demo loads
+weights, and publishes the npm package from `main` with [semantic-release](https://semantic-release.org/)
+(trusted publishing, OIDC, no token). Commits that follow
+[Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `BREAKING CHANGE:`) cut the next
+patch / minor / major; `v0.2.0` is the last hand-tagged release. The demo loads
 weights from Hugging Face unless `VITE_MODEL_BASE` or `?models=<url>` says otherwise; `npm run dev` serves
 `public/models` instead. GitHub Pages cannot set COOP/COEP headers, so `crossOriginIsolated` is false there and the
 WASM fallback runs single-threaded; WebGPU is unaffected.
