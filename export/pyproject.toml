@@ -2,7 +2,7 @@
 name = "kev-web-export"
 version = "0.1.0"
 description = "Merge a Kev checkpoint and export it to ONNX for the browser runtime"
-requires-python = ">=3.12,<3.14"
+requires-python = ">=3.14,<3.15"
 dependencies = [
     # kev itself is vendored at ../vendor/kev (git submodule) and put on sys.path by kev_web_export/__init__.py
     "accelerate>=1.15.0",
