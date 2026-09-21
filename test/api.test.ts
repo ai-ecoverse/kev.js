@@ -36,6 +36,9 @@ test("dateFacts matches kev.api.date_facts", () => {
   assert.equal(dateFacts("Same: January 1, 2026 and January 1, 2026"), "");
   assert.equal(dateFacts("only one: March 3, 2026"), "");
   assert.equal(dateFacts("February 30, 2026 and March 1, 2026"), "");
+  assert.equal(dateFacts("0099-01-01 and 0099-01-02"), "0099-01-02 is 1 day after 0099-01-01.");
+  assert.equal(dateFacts("January 1, 0001 and January 2, 0001"), "January 2, 0001 is 1 day after January 1, 0001.");
+  assert.equal(dateFacts("0000-01-01 and 0000-01-02"), "");
 });
 
 test("withDateFacts matches kev.api.with_date_facts", () => {

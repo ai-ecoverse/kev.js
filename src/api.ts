@@ -119,10 +119,11 @@ function utcDay(raw: string): number | null {
     if (!m) return null;
     y = Number(m[1]); month = Number(m[2]) - 1; d = Number(m[3]);
   }
-  const utc = Date.UTC(y, month, d);
-  const dt = new Date(utc);
+  if (y < 1) return null;   // datetime.datetime rejects year 0; Date.UTC remaps 0–99 to 1900–1999
+  const dt = new Date(Date.UTC(y, month, d));
+  dt.setUTCFullYear(y);     // undo the 0–99 → 1900+ remap so 0099-01-01 is year 99, matching strptime
   if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== month || dt.getUTCDate() !== d) return null;
-  return utc / 86_400_000;
+  return dt.getTime() / 86_400_000;
 }
 
 /** Port of kev.api.date_facts: one sentence per pair of absolute dates, in order of first appearance. */
