@@ -5,6 +5,7 @@ the JS port can be checked stage by stage: rendering, tokenization/encoding, the
 import argparse, json, random
 import torch
 from . import KEV_ROOT  # noqa: F401
+from .pin import pin
 from kev.api import SystemOneRequest, to_record, to_answers
 from kev.evaluate import load
 from kev.model import encode, rows_of
@@ -63,6 +64,8 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
+    a.run = pin(a.run)
+    print(f"run: {a.run}")
     tok, m = load(a.run, "cpu")
     fixtures = []
     for fx in HAND + load_dev(a.suite, a.n, a.seed):

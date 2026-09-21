@@ -9,6 +9,7 @@ from safetensors.torch import load_file, save_file
 from . import KEV_ROOT  # noqa: F401  (puts kev on sys.path)
 from kev.evaluate import load, resolve_run
 from kev.model import SPECIAL, MAX_STATE, MAX_BRANCH
+from .pin import pin
 
 
 def main():
@@ -16,6 +17,8 @@ def main():
     ap.add_argument("--run", default="jaredpalmer/kev-0.8b", help="Kev run dir or Hub id[@rev]")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
+    a.run = pin(a.run)                                          # exact commit: the Hub ids are republished in place
+    print(f"run: {a.run}")
     run = resolve_run(a.run)
     meta = torch.load(f"{run}/head.pt", map_location="cpu")
     tok, m = load(run, "cpu")                                  # fp32, LoRA merged (kev.evaluate.load)

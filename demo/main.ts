@@ -35,8 +35,11 @@ request.value = store.get("request") ?? "";
 request.oninput = () => store.set("request", request.value);
 if (!request.value) setPreset();
 
-/** Models whose weights finished downloading here before; the loader still checks every file's size. */
+/** Models whose weights finished downloading here before, with the revision they were: a republished checkpoint
+ * is a new download even though the URLs are the same. The loader still checks every file's size. */
 const cacheKey = (model: string, variant: string) => `cached:${model}/${variant}`;
+const revisions = new Map<string, string>();   // model -> manifest.run
+const isCached = (model: string, variant: string) => !!revisions.get(model) && store.get(cacheKey(model, variant)) === revisions.get(model);
 
 async function refreshVariants() {
   const model = $<HTMLSelectElement>("model").value;
@@ -44,9 +47,10 @@ async function refreshVariants() {
   const res = await fetch(`${modelUrl(model)}/manifest.json`);
   if (!res.ok) { sel.innerHTML = ""; sel.add(new Option("unavailable", "")); status(`${model} is not published yet.`, "err"); return; }
   const manifest = (await res.json()) as KevManifest;
+  revisions.set(model, manifest.run);
   for (const [name, v] of Object.entries(manifest.variants)) {
     if (name === "fp32") continue;   // fp32 is for Node parity tests; too large for a tab
-    const cached = store.get(cacheKey(model, name)) ? ", cached" : "";
+    const cached = isCached(model, name) ? ", cached" : "";
     sel.add(new Option(`${name} (${(v.bytes / 1e6).toFixed(0)} MB${cached})`, name));
   }
   const want = store.get(`variant:${model}`);
@@ -56,7 +60,7 @@ async function refreshVariants() {
 
 function updateLoadButton() {
   const model = $<HTMLSelectElement>("model").value, variant = $<HTMLSelectElement>("variant").value;
-  const cached = !!store.get(cacheKey(model, variant));
+  const cached = isCached(model, variant);
   $("load").textContent = cached ? "Load (cached)" : "Download & load";
 }
 
@@ -113,7 +117,8 @@ worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
   } else if (m.type === "ready") {
     ready = true;
     $("progress").classList.remove("active");
-    store.set(cacheKey($<HTMLSelectElement>("model").value, m.variant), "1");
+    const model = $<HTMLSelectElement>("model").value;
+    store.set(cacheKey(model, m.variant), revisions.get(model) ?? "");
     void refreshVariants();
     status(`Ready · ${m.variant} on ${m.device} · load ${(m.loadMs / 1000).toFixed(1)} s, warm-up ${(m.warmupMs / 1000).toFixed(1)} s`);
     setBusy(false);
@@ -217,5 +222,5 @@ if (table) table.innerHTML = models.map((m) => {
 }).join("");
 
 setBusy(false);
-if (store.get(cacheKey($<HTMLSelectElement>("model").value, $<HTMLSelectElement>("variant").value))) load();   // weights are local: start without a click
+if (isCached($<HTMLSelectElement>("model").value, $<HTMLSelectElement>("variant").value)) load();   // weights are local: start without a click
 else status("Pick a model and press Download & load.");

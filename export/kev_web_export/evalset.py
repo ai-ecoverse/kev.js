@@ -2,9 +2,10 @@
 (which matches the PyTorch model to 3e-5 on the fixtures, and is ~50x faster than PyTorch's reference DeltaNet on CPU).
 
 Scores accuracy and Brier for the reference so the browser numbers can be compared record by record."""
-import argparse, json
+import argparse, json, os
 import numpy as np
 from . import KEV_ROOT  # noqa: F401
+from .pin import pin
 from kev.api import SystemOneRequest, to_record
 from kev.evaluate import load_tokenizer
 from kev.model import encode, rows_of
@@ -39,7 +40,9 @@ def main():
         recs.append({"name": fx["name"], "record": {"state": rec["state"], "questions": [{"instr": q["instr"], "options": q["options"]} for q in rec["questions"]]},
                      "probs": probs, "labels": labels})
     summary = {"questions": n, "accuracy": correct / n, "brier": brier / n}
-    json.dump({"reference": a.model, "suite": a.suite, "summary": summary, "records": recs}, open(a.out, "w"))
+    kev_json = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(a.model))), "kev.json")
+    run = json.load(open(kev_json))["run"] if os.path.exists(kev_json) else None   # the exported checkpoint's pinned commit
+    json.dump({"run": run, "reference": a.model, "suite": a.suite, "summary": summary, "records": recs}, open(a.out, "w"))
     print(json.dumps(summary))
 
 

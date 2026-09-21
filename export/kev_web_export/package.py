@@ -42,7 +42,13 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     for f in ("tokenizer.json", "tokenizer_config.json"): link(f"{a.build}/tokenizer/{f}", f"{a.out}/{f}")
     link(f"{a.build}/head.safetensors", f"{a.out}/head.safetensors")
-    fixtures = json.load(open(a.fixtures))["fixtures"] if a.fixtures else None
+    fixtures = None
+    if a.fixtures:
+        fx = json.load(open(a.fixtures))
+        # parity is only meaningful against the same checkpoint the weights were exported from
+        if fx["run"] != kev["run"]:
+            raise SystemExit(f"{a.fixtures} is from {fx['run']}, but {a.build} was exported from {kev['run']}")
+        fixtures = fx["fixtures"]
     variants = {}
     for spec in a.variant:
         name, d = spec.split("=", 1)
