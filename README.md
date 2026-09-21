@@ -8,7 +8,26 @@ run in a Web Worker.
 
 ## Results
 
-Kev-0.8B (`jaredpalmer/kev-0.8b`), headless Chrome 153 on an Apple M4 Max. Reference: the fp32 PyTorch model
+Both Kev models run in headless Chrome 153 on an Apple M4 Max (WebGPU on Metal).
+
+### Kev-4B
+
+`jaredpalmer/kev-4b`, variant `q8f32`: int8 weights with fp32 activations, a 4.7 GB download in three shards.
+
+| | Browser (WebGPU) | Reference (fp32) |
+|---|---|---|
+| Accuracy on 300 transfer-v4 dev records | 0.770 | 0.767 |
+| Brier score | 0.339 | 0.340 |
+| Max / mean \|Δp\| on the 300 records | 0.032 / 0.0024 | – |
+| Max \|Δp\| on 29 fixture questions (vs PyTorch) | 0.012, no argmax flips | – |
+| 3-question request | 364 ms (267 ms with the state cached) | Kev's PyTorch server: 779 ms on an M5 |
+
+On the README ticket it answers returns 0.47, shipping 0.28, billing 0.25, the same as Kev-4B's published example.
+int4 (2.3–2.5 GB) is not usable at 4B either: max \|Δp\| 0.31–0.37 and 3 of 29 argmaxes flipped.
+
+### Kev-0.8B
+
+`jaredpalmer/kev-0.8b`. Reference: the fp32 PyTorch model
 (`kev.evaluate.load`). The fp32 ONNX export matches it to 3e-5, so the 300-record comparison uses the fp32 export
 as the reference.
 
@@ -22,7 +41,7 @@ as the reference.
 For comparison, Kev's own PyTorch server takes 329 ms for Kev-0.8B on an M5 (MPS, no fast DeltaNet kernels). The
 largest deviations come from near-ties, for example an MMLU item whose reference top probability is 0.499.
 
-int4 is not usable at 0.8B. Round-to-nearest, k-quant, block size 16, and int8 for the linear-attention layers all
+int4 is not usable at 0.8B either. Round-to-nearest, k-quant, block size 16, and int8 for the linear-attention layers all
 move probabilities by 0.24–0.78 and flip 1–8 of 49 argmaxes, including with fp16 embeddings. See
 `export/build.sh` for the variants that were tried.
 
@@ -43,9 +62,10 @@ with no custom attention mask:
    `LinearAttentionGate`, `GatedRMSNorm`, `MRotaryEmbedding` and `GroupQueryAttention`, all of which have WebGPU
    kernels in onnxruntime-web 1.30 (`onnxruntime-web/webgpu`, the native WebGPU EP). 667 of 675 nodes run on
    WebGPU; the other 8 are shape ops.
-3. **Post-process** (`kev_web_export.postprocess`): the builder can only quantize embeddings to int4. The 500 MB
-   fp16 embedding table becomes int8 with one scale per row, using plain `Gather`/`Cast`/`Mul`. The rotary caches
-   are trimmed from 262k positions to 8,192, which is `kev.serve`'s limit.
+3. **Post-process** (`kev_web_export.postprocess`): the builder can only quantize embeddings to int4. The
+   embedding table (0.5 GB fp16 for 0.8B, 2.5 GB fp32 for 4B) becomes int8 with one scale per row, using plain
+   `Gather`/`Cast`/`Mul`. The rotary caches are trimmed from 262k positions to 8,192, which is `kev.serve`'s limit.
+   External weights are split into files of at most 1.9 GB, because browsers cap single buffers near 2 GB.
 4. **Package** (`kev_web_export.package`): `manifest.json` (I/O names, empty-cache shapes, parity), tokenizer,
    head and one directory per variant.
 
@@ -75,6 +95,9 @@ cd .. && npm install && npm run dev      # http://127.0.0.1:5173
 On macOS the builder can abort with `recursive_mutex lock failed` after it has written everything.
 `build.sh` checks for `genai_config.json` instead of relying on the exit code.
 
+Kev-4B uses the same steps with `--run jaredpalmer/kev-4b --out build/kev-4b` and only the `fp32-cpu` and
+`q8f32-webgpu` builds, and about 45 GB of disk for the merged checkpoint, the fp32 reference and the int8 build.
+
 ### Library
 
 ```ts
@@ -101,6 +124,7 @@ the console, and `?verbose` logs where onnxruntime placed each node.
 ```bash
 npm test                                   # rendering, tokenization and encoding parity; full runtime on onnxruntime-node
 KEV_VARIANTS=fp32 npm test                 # just the exact variant
+KEV_MODEL=kev-4b npm test                  # fixtures/kev-4b.json against dist/models/kev-4b
 cd export && uv run python -m kev_web_export.parity --model build/kev-0.8b/web-q8f32/model.onnx \
     --head build/kev-0.8b/head.safetensors --fixtures ../fixtures/kev-0.8b.json
 ```
@@ -108,17 +132,19 @@ cd export && uv run python -m kev_web_export.parity --model build/kev-0.8b/web-q
 - `fixtures/kev-0.8b.json`: 43 records (3 hand-written, including structured state and delimiter injection, plus
   40 from transfer-v4 dev) with the rendered record, Kev's token encoding and the PyTorch probabilities.
   Regenerate with `kev_web_export.fixtures`.
-- `fixtures/kev-0.8b-transfer-v4-dev300.json`: 300 labelled records with fp32 reference probabilities
-  (`kev_web_export.evalset`), used for the browser accuracy and Brier comparison above.
+- `fixtures/kev-4b.json`: the same 3 hand-written records plus 20 dev records, for Kev-4B.
+- `fixtures/kev-*-transfer-v4-dev300.json`: 300 labelled records with fp32 reference probabilities
+  (`kev_web_export.evalset`), used for the browser accuracy and Brier comparisons above.
 
 ## Limitations
 
 - JSON parsing loses two things Kev's Python server keeps. `1.0` arrives as `1` and is rendered `1`, where Python
   renders `1.0`. Object keys that look like integers (`"10"`, `"2"`) are iterated in numeric order, which can
   reorder Choice options with numeric names.
-- Kev-0.8B is the only packaged model. Kev-4B would need int4 at about 2.5 GB, and int4 is not good enough at
-  0.8B; 4B has not been measured yet.
-- The first load downloads 822 MB. It was tested in Chrome only; Safari and Firefox WebGPU are untested.
+- The first load downloads 822 MB for Kev-0.8B, or 4.7 GB for Kev-4B, and the files stay in Cache Storage.
+  Kev-4B needs a GPU with enough memory for about 4.5 GB of weights. Only Chrome was tested; Safari and Firefox
+  WebGPU are untested.
+- Kev-9B is not packaged. At int8 it would be about 10 GB.
 - onnxruntime-node 1.30 on Node 24+ reads 0 bytes from `Float16Array` float16 tensors, so the tests hide
   `Float16Array` (`test/no-float16.ts`). Browsers are not affected.
 - Requests run one at a time per model instance.

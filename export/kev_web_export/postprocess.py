@@ -17,6 +17,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--embed", choices=["keep", "int8"], default="int8")
     ap.add_argument("--rope-positions", type=int, default=8192)
+    ap.add_argument("--shard-mb", type=int, default=1900, help="max size of one external-data file (browsers cap single buffers near 2 GB)")
     a = ap.parse_args()
     m = onnx.load(f"{a.src}/model.onnx", load_external_data=True)
     g = m.graph
@@ -52,9 +53,33 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     for f in os.listdir(a.src):
         if f.endswith((".json", ".jinja")): os.system(f"cp '{a.src}/{f}' '{a.out}/'")
-    if os.path.exists(f"{a.out}/model.onnx.data"): os.remove(f"{a.out}/model.onnx.data")
-    onnx.save(m, f"{a.out}/model.onnx", save_as_external_data=True, all_tensors_to_one_file=True, location="model.onnx.data", size_threshold=1024)
-    print(f"{a.out}: {os.path.getsize(f'{a.out}/model.onnx.data') / 1e6:.0f} MB")
+    for f in os.listdir(a.out):
+        if f.startswith("model.onnx.data"): os.remove(f"{a.out}/{f}")
+    files = save_sharded(m, a.out, a.shard_mb * 1_000_000)
+    print(f"{a.out}: " + ", ".join(f"{f} {os.path.getsize(f'{a.out}/{f}') / 1e6:.0f} MB" for f in files))
+
+
+def save_sharded(m, out, max_bytes, threshold=1024):
+    """Write initializers over `threshold` bytes to model.onnx.data, model.onnx.data_1, ... (each <= max_bytes unless a
+    single tensor is larger), then the graph itself to model.onnx."""
+    from onnx.external_data_helper import set_external_data
+    files, fh, off = [], None, 0
+    for t in m.graph.initializer:
+        raw = t.raw_data if t.HasField("raw_data") else numpy_helper.from_array(numpy_helper.to_array(t), t.name).raw_data
+        if len(raw) <= threshold: continue
+        if fh is None or (off and off + len(raw) > max_bytes):
+            if fh: fh.close()
+            files.append("model.onnx.data" if not files else f"model.onnx.data_{len(files)}")
+            fh, off = open(f"{out}/{files[-1]}", "wb"), 0
+        fh.write(raw)
+        nt = TensorProto(name=t.name, data_type=t.data_type, dims=list(t.dims), raw_data=raw)
+        set_external_data(nt, location=files[-1], offset=off, length=len(raw))
+        nt.data_location = TensorProto.EXTERNAL; nt.ClearField("raw_data")
+        t.CopyFrom(nt)
+        off += len(raw)
+    if fh: fh.close()
+    with open(f"{out}/model.onnx", "wb") as f: f.write(m.SerializeToString())
+    return files
 
 
 if __name__ == "__main__":

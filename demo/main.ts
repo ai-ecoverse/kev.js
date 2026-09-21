@@ -3,7 +3,7 @@ import type { WorkerRequest, WorkerResponse } from "./worker.ts";
 import type { Answer, KevManifest, SystemOneResponse } from "../src/index.ts";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-const models = ["kev-0.8b"];   // directories under /models
+const models = ["kev-0.8b", "kev-4b"];   // directories under /models
 const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
 const verbose = new URLSearchParams(location.search).has("verbose");   // ?verbose: ORT logs, incl. node placement per EP
 let nextId = 1;
@@ -22,7 +22,7 @@ async function refreshVariants() {
   const manifest = (await (await fetch(`models/${$<HTMLSelectElement>("model").value}/manifest.json`)).json()) as KevManifest;
   const sel = $<HTMLSelectElement>("variant"); sel.innerHTML = "";
   for (const [name, v] of Object.entries(manifest.variants)) {
-    if (v.bytes > 2.5e9) continue;   // fp32 is for Node parity tests; too large for a tab
+    if (name === "fp32") continue;   // fp32 is for Node parity tests; too large for a tab
     sel.add(new Option(`${name} (${(v.bytes / 1e6).toFixed(0)} MB)`, name));
   }
 }

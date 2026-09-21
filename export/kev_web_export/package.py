@@ -48,10 +48,11 @@ def main():
         name, d = spec.split("=", 1)
         os.makedirs(f"{a.out}/{name}", exist_ok=True)
         link(f"{a.build}/{d}/model.onnx", f"{a.out}/{name}/model.onnx")
-        link(f"{a.build}/{d}/model.onnx.data", f"{a.out}/{name}/model.onnx.data")
+        data = sorted((f for f in os.listdir(f"{a.build}/{d}") if f.startswith("model.onnx.data")), key=lambda f: (len(f), f))
+        for f in data: link(f"{a.build}/{d}/{f}", f"{a.out}/{name}/{f}")
         inputs, outputs = io_info(f"{a.out}/{name}/model.onnx")
-        v = {"model": f"{name}/model.onnx", "data": [f"{name}/model.onnx.data"],
-             "bytes": os.path.getsize(f"{a.out}/{name}/model.onnx") + os.path.getsize(f"{a.out}/{name}/model.onnx.data"),
+        v = {"model": f"{name}/model.onnx", "data": [f"{name}/{f}" for f in data],
+             "bytes": sum(os.path.getsize(f"{a.out}/{name}/{f}") for f in ["model.onnx", *data]),
              "io_dtype": next(o["type"] for o in outputs if o["name"] == "hidden_states"), "inputs": inputs, "outputs": outputs}
         if fixtures:
             import numpy as np
