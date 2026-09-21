@@ -1,10 +1,28 @@
-# kev-web
+# @ai-ecoverse/kev.js
 
 [Kev](https://github.com/jaredpalmer/kev) decision models running in the browser on WebGPU (or WASM), with the same
 TypeSafe System One request and response shapes as `kev.serve`. No server: the model, tokenizer and pointer head
 run in a Web Worker.
 
-![kev-web demo](docs/demo.png)
+**[Homepage and live demo](https://ai-ecoverse.github.io/kev.js/)** · **[Weights](https://huggingface.co/ai-ecoverse/kev.js)** · `npm install @ai-ecoverse/kev.js onnxruntime-web`
+
+![kev.js demo](docs/demo.png)
+
+```ts
+import * as ort from "onnxruntime-web/webgpu";
+import { loadKev } from "@ai-ecoverse/kev.js";
+
+const kev = await loadKev("https://huggingface.co/ai-ecoverse/kev.js/resolve/main/kev-0.8b", { ort, variant: "q8f32" });
+const res = await kev.systemOne({
+  state: "I was charged twice. Please fix this ASAP.",
+  questions: {
+    billing: { type: "noul", instructions: "Is this ticket about billing?" },
+    urgency: { type: "score", instructions: "How urgent is this ticket?", criteria: ["can wait", "this week", "today"] },
+  },
+});
+res.answers.billing.noul;    // 0.99
+res.answers.urgency.score;   // 1.79
+```
 
 ## Results
 
@@ -89,7 +107,7 @@ uv run python -m kev_web_export.merge --run jaredpalmer/kev-0.8b --out build/kev
 uv run python -m kev_web_export.postprocess --src build/kev-0.8b/onnx-q8f32-webgpu --out build/kev-0.8b/web-q8f32
 uv run python -m kev_web_export.postprocess --src build/kev-0.8b/onnx-q8f16-webgpu --out build/kev-0.8b/web-q8
 uv run python -m kev_web_export.postprocess --src build/kev-0.8b/onnx-fp16-webgpu --out build/kev-0.8b/web-fp16 --embed keep
-uv run python -m kev_web_export.package --build build/kev-0.8b --out ../dist/models/kev-0.8b \
+uv run python -m kev_web_export.package --build build/kev-0.8b --out ../public/models/kev-0.8b \
     --variant q8f32=web-q8f32 --variant q8=web-q8 --variant fp16=web-fp16 --variant fp32=onnx-fp32-cpu \
     --fixtures ../fixtures/kev-0.8b.json
 cd .. && npm install && npm run dev      # http://127.0.0.1:5173
@@ -101,22 +119,19 @@ On macOS the builder can abort with `recursive_mutex lock failed` after it has w
 Kev-4B uses the same steps with `--run jaredpalmer/kev-4b --out build/kev-4b` and only the `fp32-cpu` and
 `q8f32-webgpu` builds, and about 45 GB of disk for the merged checkpoint, the fp32 reference and the int8 build.
 
-### Library
+### Publishing
 
-```ts
-import * as ort from "onnxruntime-web/webgpu";
-import { loadKev } from "kev-web";
-
-const kev = await loadKev("https://example.com/models/kev-0.8b", { ort, variant: "q8f32", executionProviders: ["webgpu"] });
-const res = await kev.systemOne({
-  state: "I was charged twice. Please fix this ASAP.",
-  questions: {
-    billing: { type: "noul", instructions: "Is this ticket about billing?" },
-    urgency: { type: "score", instructions: "How urgent is this ticket?", criteria: ["can wait", "this week", "today"] },
-  },
-});
-// res.answers.billing.noul, res.answers.urgency.score, res.usage, res.latency_ms
+```bash
+HF_TOKEN=... uv run python -m kev_web_export.upload_hf --repo ai-ecoverse/kev.js   # weights + model card
+npm run build:lib                                                                 # dist/ for npm (tsc)
+npm run build:demo                                                                # homepage (PAGES_BASE=/kev.js/ in CI)
 ```
+
+`.github/workflows` builds the homepage to GitHub Pages on every push to `main`, runs the tests that need no
+weights, and publishes the npm package from a `v*` tag with trusted publishing (OIDC, no token). The demo loads
+weights from Hugging Face unless `VITE_MODEL_BASE` or `?models=<url>` says otherwise; `npm run dev` serves
+`public/models` instead. GitHub Pages cannot set COOP/COEP headers, so `crossOriginIsolated` is false there and the
+WASM fallback runs single-threaded; WebGPU is unaffected.
 
 `kev.systemOne(req, { onAnswer })` reports each question as it finishes, so a UI can fill answers in as they land.
 `kev.systemOneSeparate()` answers each question in its own pass. `kev.probs(record)` returns raw probabilities.
@@ -128,7 +143,7 @@ the console, and `?verbose` logs where onnxruntime placed each node.
 ```bash
 npm test                                   # rendering, tokenization and encoding parity; full runtime on onnxruntime-node
 KEV_VARIANTS=fp32 npm test                 # just the exact variant
-KEV_MODEL=kev-4b npm test                  # fixtures/kev-4b.json against dist/models/kev-4b
+KEV_MODEL=kev-4b npm test                  # fixtures/kev-4b.json against public/models/kev-4b
 cd export && uv run python -m kev_web_export.parity --model build/kev-0.8b/web-q8f32/model.onnx \
     --head build/kev-0.8b/head.safetensors --fixtures ../fixtures/kev-0.8b.json
 ```

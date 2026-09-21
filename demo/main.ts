@@ -3,9 +3,16 @@ import type { WorkerRequest, WorkerResponse } from "./worker.ts";
 import type { Answer, KevManifest, SystemOneResponse } from "../src/index.ts";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-const models = ["kev-0.8b", "kev-4b"];   // directories under /models
+const models = ["kev-0.8b", "kev-4b", "kev-9b"];
+
+// Weights live on Hugging Face for the published page; a dev server with public/models/ serves them locally.
+// Override with VITE_MODEL_BASE, or ?models=<url> for a one-off.
+const HF_BASE = "https://huggingface.co/ai-ecoverse/kev.js/resolve/main";
+const params = new URLSearchParams(location.search);
+const MODEL_BASE = params.get("models") ?? (import.meta.env.VITE_MODEL_BASE as string | undefined) ?? (import.meta.env.DEV ? "models" : HF_BASE);
+const modelUrl = (name: string) => new URL(`${MODEL_BASE.replace(/\/$/, "")}/${name}`, location.href).href;
 const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
-const verbose = new URLSearchParams(location.search).has("verbose");   // ?verbose: ORT logs, incl. node placement per EP
+const verbose = params.has("verbose");   // ?verbose: ORT logs, incl. node placement per EP
 const store = { get: (k: string) => localStorage.getItem(`kev-web:${k}`), set: (k: string, v: string) => localStorage.setItem(`kev-web:${k}`, v) };
 
 let nextId = 1;
@@ -33,8 +40,10 @@ const cacheKey = (model: string, variant: string) => `cached:${model}/${variant}
 
 async function refreshVariants() {
   const model = $<HTMLSelectElement>("model").value;
-  const manifest = (await (await fetch(`models/${model}/manifest.json`)).json()) as KevManifest;
   const sel = $<HTMLSelectElement>("variant"); sel.innerHTML = "";
+  const res = await fetch(`${modelUrl(model)}/manifest.json`);
+  if (!res.ok) { sel.innerHTML = ""; sel.add(new Option("unavailable", "")); status(`${model} is not published yet.`, "err"); return; }
+  const manifest = (await res.json()) as KevManifest;
   for (const [name, v] of Object.entries(manifest.variants)) {
     if (name === "fp32") continue;   // fp32 is for Node parity tests; too large for a tab
     const cached = store.get(cacheKey(model, name)) ? ", cached" : "";
@@ -74,7 +83,7 @@ function load() {
   $("progress").classList.add("active");
   $("bar").style.width = "0%";
   status("Starting…");
-  send({ type: "load", baseUrl: new URL(`models/${model}`, location.href).href, variant, device: device.value as "webgpu" | "wasm", verbose });
+  send({ type: "load", baseUrl: modelUrl(model), variant, device: device.value as "webgpu" | "wasm", verbose });
 }
 $("load").onclick = load;
 
@@ -194,6 +203,18 @@ async function run(mode: "packed" | "separate") {
 $("run").onclick = () => run("packed");
 $("separate").onclick = () => run("separate");
 document.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !$<HTMLButtonElement>("run").disabled) run("packed"); });
+
+/** Published numbers for the models table; measured on an M4 Max (see the repo README). */
+const MODEL_FACTS: Record<string, { size: string; acc: string; ms: string }> = {
+  "kev-0.8b": { size: "822 MB", acc: "0.657 / 0.488", ms: "112 ms" },
+  "kev-4b": { size: "4.7 GB", acc: "0.770 / 0.339", ms: "364 ms" },
+  "kev-9b": { size: "—", acc: "—", ms: "—" },
+};
+const table = document.getElementById("model-table");
+if (table) table.innerHTML = models.map((m) => {
+  const f = MODEL_FACTS[m];
+  return `<tr><td><code>${m}</code></td><td>${f.size}</td><td>${f.acc}</td><td>${f.ms}</td></tr>`;
+}).join("");
 
 setBusy(false);
 if (store.get(cacheKey($<HTMLSelectElement>("model").value, $<HTMLSelectElement>("variant").value))) load();   // weights are local: start without a click

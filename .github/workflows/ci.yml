@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with: { submodules: true }
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build:lib
+      # rendering, tokenization and encoding parity against the Python fixtures; the model tests need the weight
+      # bundles (public/models), which are not in the repo, and skip without them
+      - run: npm test

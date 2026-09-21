@@ -3,38 +3,170 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Kev in the browser</title>
+  <title>kev.js — decision models in the browser</title>
+  <meta name="description" content="Run Kev decision models in the browser on WebGPU. Yes/no, multiple-choice and rating questions with calibrated probabilities, no server." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◐</text></svg>" />
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
-  <header>
-    <h1>Kev <span>in the browser</span></h1>
-    <p>Kev decision models on WebGPU/WASM. Nothing leaves this tab.</p>
+  <header class="hero">
+    <h1>kev.js</h1>
+    <p class="tagline">Decision models in the browser. Text in, calibrated probabilities out — on your GPU, nothing sent anywhere.</p>
+    <p class="sub">
+      <a href="https://github.com/jaredpalmer/kev">Kev</a> is a family of small decision models built on Qwen3.5.
+      <code>@ai-ecoverse/kev.js</code> runs them on WebGPU through onnxruntime-web, with the same
+      <a href="https://docs.typesafe.ai/api">System One</a> request and response shapes as Kev's own server.
+    </p>
+    <nav>
+      <a href="#demo">Demo</a><a href="#install">Install</a><a href="#api">API</a><a href="#models">Models</a><a href="#how">How it works</a>
+      <a href="https://github.com/ai-ecoverse/kev.js">GitHub</a>
+    </nav>
   </header>
-  <section id="loader" class="panel">
-    <label>Model <select id="model"></select></label>
-    <label>Variant <select id="variant"></select></label>
-    <label>Device <select id="device"><option value="webgpu">WebGPU</option><option value="wasm">WASM (CPU)</option></select></label>
-    <button id="load">Download &amp; load</button>
-    <button id="reset" title="delete the cached weights">Clear cache</button>
-    <div id="progress"><div id="bar"></div></div>
-    <p id="status">Not loaded.</p>
+
+  <section id="demo">
+    <h2>Try it</h2>
+    <p class="note">
+      The first load downloads the weights once and keeps them in the browser cache. Kev-0.8B is 822 MB; the bigger
+      models are worth the wait if your connection can take it.
+    </p>
+    <div id="loader" class="panel">
+      <label>Model <select id="model"></select></label>
+      <label>Variant <select id="variant"></select></label>
+      <label>Device <select id="device"><option value="webgpu">WebGPU</option><option value="wasm">WASM (CPU)</option></select></label>
+      <button id="load">Download &amp; load</button>
+      <button id="reset" title="delete the cached weights">Clear cache</button>
+      <div id="progress"><div id="bar"></div></div>
+      <p id="status">Not loaded.</p>
+    </div>
+    <main>
+      <section class="panel">
+        <div class="row">
+          <label>Preset <select id="preset"></select></label>
+          <span class="spacer"></span>
+          <button id="run" disabled title="⌘↵">Run</button>
+          <button id="separate" disabled title="each question in its own pass">Packed vs separate</button>
+        </div>
+        <textarea id="request" spellcheck="false"></textarea>
+      </section>
+      <section class="panel">
+        <div id="answers"><p class="muted">Answers appear here, one question at a time.</p></div>
+        <details><summary>Response JSON</summary><pre id="raw"></pre></details>
+      </section>
+    </main>
   </section>
-  <main>
-    <section class="panel">
-      <div class="row">
-        <label>Preset <select id="preset"></select></label>
-        <span class="spacer"></span>
-        <button id="run" disabled title="⌘↵">Run</button>
-        <button id="separate" disabled title="each question in its own pass">Packed vs separate</button>
-      </div>
-      <textarea id="request" spellcheck="false"></textarea>
-    </section>
-    <section class="panel">
-      <div id="answers"><p class="muted">Answers appear here.</p></div>
-      <details><summary>Response JSON</summary><pre id="raw"></pre></details>
-    </section>
-  </main>
+
+  <section id="install">
+    <h2>Install</h2>
+<pre><code>npm install @ai-ecoverse/kev.js onnxruntime-web</code></pre>
+    <p>
+      Weights are not in the package. They are downloaded from a URL you choose — the bundles published on
+      <a href="https://huggingface.co/ai-ecoverse/kev.js">Hugging Face</a>, or your own host.
+    </p>
+<pre><code>import * as ort from "onnxruntime-web/webgpu";
+import { loadKev } from "@ai-ecoverse/kev.js";
+
+const kev = await loadKev("https://huggingface.co/ai-ecoverse/kev.js/resolve/main/kev-0.8b", {
+  ort,
+  variant: "q8f32",
+  executionProviders: ["webgpu"],
+  onProgress: ({ file, loaded, total }) =&gt; console.log(file, loaded / total),
+});</code></pre>
+    <p class="note">
+      Run it in a Web Worker: loading takes seconds and every request is tens to hundreds of milliseconds of GPU work.
+      Weight files are cached in Cache Storage, so later loads take a second or two.
+    </p>
+  </section>
+
+  <section id="api">
+    <h2>Asking questions</h2>
+    <p>
+      One request carries the text to judge (<code>state</code>) and any number of questions. Questions share the
+      state but cannot read each other, so adding a question never changes another one's answer.
+    </p>
+<pre><code>const res = await kev.systemOne({
+  state: "Shoes arrived two weeks late and in the wrong size. Also I see two charges on my card.",
+  questions: {
+    department: { type: "choice", instructions: "Which team should handle this?",
+      criteria: { returns: "Exchanges, refunds, wrong or damaged items",
+                  shipping: "Delivery status, delays, lost packages",
+                  billing:  "Charges, invoices, payment problems" } },
+    escalate:    { type: "noul",  instructions: "Does this need urgent human attention?" },
+    frustration: { type: "score", instructions: "How frustrated is the customer?",
+                   criteria: ["Calm", "Frustrated", "Very angry"] },
+  },
+});
+
+res.answers.department.choice;         // "returns"
+res.answers.department.probabilities;  // { returns: 0.47, shipping: 0.28, billing: 0.25 }
+res.answers.escalate.noul;             // 0.93   probability of yes
+res.answers.frustration.score;         // 1.44   expected level, 0-based</code></pre>
+    <table class="api">
+      <thead><tr><th>Type</th><th>Criteria</th><th>Answer</th></tr></thead>
+      <tbody>
+        <tr><td><code>noul</code></td><td>optional descriptions for <code>true</code> and <code>false</code></td><td><code>noul</code>: probability of yes</td></tr>
+        <tr><td><code>choice</code></td><td>1–255 named options, each with a description or <code>null</code></td><td><code>choice</code>, <code>probabilities</code>, <code>confidence</code></td></tr>
+        <tr><td><code>score</code></td><td>2–255 level descriptions, lowest first</td><td><code>score</code> (mean level), <code>legend</code>, <code>probabilities</code>, <code>confidence</code></td></tr>
+      </tbody>
+    </table>
+    <p>
+      <code>state</code> and <code>instructions</code> also accept objects and arrays, which are rendered as labelled
+      text. Other methods: <code>systemOne(req, { onAnswer })</code> reports each question as it finishes,
+      <code>systemOneSeparate(req)</code> runs every question in its own pass, and <code>probs(record)</code> returns
+      raw probabilities. The shapes match Kev's <code>POST /v1/systemone</code>, so the TypeSafe SDK's examples carry over.
+    </p>
+  </section>
+
+  <section id="models">
+    <h2>Models</h2>
+    <table class="api">
+      <thead><tr><th>Model</th><th>Download</th><th>Accuracy / Brier<br><small>300 held-out records, new sources</small></th><th>3-question request</th></tr></thead>
+      <tbody id="model-table"></tbody>
+    </table>
+    <p class="note">
+      Weights are int8 with fp32 activations. Browser probabilities track the full-precision model closely: on 300
+      labelled records Kev-4B scores 0.770 against 0.767, with a mean probability difference of 0.0024. int4 is not
+      offered — it moves probabilities by 0.2–0.8 and flips answers, which defeats the point of a calibrated model.
+      Timings are from an Apple M4 Max; the WASM fallback is roughly 5× slower.
+    </p>
+  </section>
+
+  <section id="how">
+    <h2>How it works</h2>
+    <p>
+      Kev is a Qwen3.5 base with a rank-16 LoRA and a small pointer head. The head scores each option's boundary
+      token against the question's decision token, so the answer is read out of the model's own activations rather
+      than generated as text. Nothing is sampled, and one forward pass answers every question.
+    </p>
+    <p>
+      Qwen3.5 mixes recurrent Gated DeltaNet layers with attention, so the state runs once and each question runs as
+      a continuation of the state's cache — exact isolation, and the state is never recomputed. kev.js keeps those
+      caches on the GPU between questions and reuses them across requests that share a state.
+    </p>
+    <p>
+      <a href="https://github.com/ai-ecoverse/kev.js#readme">The README</a> covers the export pipeline, the
+      quantization measurements and how parity with the PyTorch model is verified.
+    </p>
+  </section>
+
+  <footer>
+    <h2>Credits</h2>
+    <p>
+      <a href="https://github.com/jaredpalmer/kev">Kev</a> is by <a href="https://github.com/jaredpalmer">Jared Palmer</a>
+      — the models, the training recipe, the evaluation suites and the API design are all his work, published under
+      Apache-2.0. This project only packages those checkpoints to run in a browser; it trains nothing.
+    </p>
+    <p>
+      Kev builds on <a href="https://huggingface.co/collections/Qwen/qwen35">Qwen3.5</a> base models (Apache-2.0) and
+      follows the architecture described in
+      <a href="https://archerhume.com/posts/jevs-architecture-unmasked">Jev's Architecture Unmasked</a> by Archer Hume.
+      The request and response shapes match <a href="https://docs.typesafe.ai/api">TypeSafe's System One</a> API;
+      Jev is TypeSafe's hosted model and is not affiliated with this project.
+      Inference runs on <a href="https://onnxruntime.ai/docs/tutorials/web/">onnxruntime-web</a>, exported with the
+      <a href="https://github.com/microsoft/onnxruntime-genai">onnxruntime-genai</a> model builder, and tokenization uses
+      <a href="https://github.com/huggingface/tokenizers.js">@huggingface/tokenizers</a>.
+    </p>
+    <p class="muted">kev.js is Apache-2.0. Model weights keep their original licenses.</p>
+  </footer>
   <script type="module" src="./main.ts"></script>
 </body>
 </html>

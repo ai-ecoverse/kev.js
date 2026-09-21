@@ -19,7 +19,7 @@ export interface Fixture {
 export const model = process.env.KEV_MODEL ?? "kev-0.8b";
 export const fixtures: Fixture[] = JSON.parse(readFileSync(`${root}/fixtures/${model}.json`, "utf8")).fixtures;
 
-export const modelDir = process.env.KEV_MODEL_DIR ?? `${root}/dist/models/${model}`;
+export const modelDir = process.env.KEV_MODEL_DIR ?? `${root}/public/models/${model}`;
 export const haveModel = existsSync(`${modelDir}/manifest.json`);
 
 export function tokenizer(): Tokenizer {
