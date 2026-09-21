@@ -15,7 +15,7 @@ async function load(variant: string): Promise<Kev> {
   const v = manifest!.variants[variant];
   const session = await ort.InferenceSession.create(`${modelDir}/${v.model}`, Kev.sessionOptions(manifest!, variant, false));
   const head = PointerHead.fromSafetensors(readFileSync(`${modelDir}/${manifest!.files.head}`).buffer as ArrayBuffer);
-  return new Kev({ ort: ort as unknown as OrtModule, session, head, tokenizer: tokenizer(), manifest: manifest!, variant });
+  return new Kev({ ort: ort as unknown as OrtModule, session, head, tokenizer: await tokenizer(), manifest: manifest!, variant });
 }
 
 for (const variant of variants) {

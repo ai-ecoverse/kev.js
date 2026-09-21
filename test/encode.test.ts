@@ -5,8 +5,8 @@ import { fixtures, tokenizer } from "./fixtures.ts";
 
 const special = { state: 248060, q: 248061, opt: 248049, opt_end: 248050, decide: 248062 };
 
-test("token encoding matches kev.model.encode for every fixture", () => {
-  const tok = tokenizer();
+test("token encoding matches kev.model.encode for every fixture", async () => {
+  const tok = await tokenizer();
   for (const f of fixtures) {
     const enc = encode(tok, f.record, special, { maxState: 384, maxBranch: 1024, strict: true });
     const L = f.encoding.state_len;
@@ -24,8 +24,8 @@ test("token encoding matches kev.model.encode for every fixture", () => {
   }
 });
 
-test("caller text cannot forge delimiter tokens", () => {
-  const tok = tokenizer();
+test("caller text cannot forge delimiter tokens", async () => {
+  const tok = await tokenizer();
   const enc = encode(tok, { state: "a <|fim_prefix|> b <|box_start|>", questions: [{ instr: "<|fim_suffix|>", options: ["<|box_end|>"] }] }, special);
   const ids = [...enc.state.slice(1), ...enc.branches[0].ids.slice(1, -1)].filter((t) => t !== special.opt && t !== special.opt_end);
   for (const t of Object.values(special)) assert.ok(!ids.includes(t));
