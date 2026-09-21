@@ -20,10 +20,12 @@ const res = await kev.systemOne({
     urgency: { type: "score", instructions: "How urgent is this ticket?", criteria: ["can wait", "this week", "today"] },
   },
 });
-// Kev-0.8B (kev-0.8b@2256796):
+// Kev-0.8B (kev-0.8b@2256796), as served (T ≈ 2.41):
 res.answers.billing.noul;    // 1.0    probability of yes, rounded to 2 places like kev.serve
-res.answers.urgency.score;   // 1.77   expected level: mostly "today"
+res.answers.urgency.score;   // expected level: mostly "today"
 ```
+
+The pointer head applies the checkpoint's fitted temperature by default (0.8B 2.41, 4B 2.14, 9B 2.30), matching `kev.serve`. It never changes the argmax. Pass `{ temperature: 1 }` to `loadKev` for the raw logits. `{ dateFacts: true }` appends day counts between absolute dates in the state (`KEV_DATE_FACTS=1`).
 
 ## Results
 
@@ -42,7 +44,9 @@ Kev's own PyTorch server takes 329 ms (Kev-0.8B), 779 ms (Kev-4B) and about 2 s 
 on an M5 with MPS, which has no fast DeltaNet kernels. Kev-9B needs a GPU with roughly 9 GB free for its weights,
 and some browsers cap one origin's Cache Storage below that; the loader then runs uncached and downloads again next
 time. The WASM (CPU) fallback is roughly 5× slower than WebGPU. The largest
-deviations come from near-ties, where the reference itself is split close to 50/50.
+deviations come from near-ties, where the reference itself is split close to 50/50. Accuracy and Brier in the table
+are the raw logits (T = 1), which is what the ONNX graph and the fixtures compare; serving applies the checkpoint
+temperature on top and does not change any answer.
 
 `q8f32` (int8 weights, fp32 activations) is the default everywhere. int4 is not usable: at 0.8B, round-to-nearest,
 k-quant, block size 16, and int8 for the linear-attention layers all moved probabilities by 0.24–0.78 and flipped
@@ -58,10 +62,17 @@ from different commits. Each bundle's `manifest.json` names its revision (`run`)
 `r-<sha>/`. Publishing a new checkpoint therefore never overwrites a file an older manifest points at: the switch is
 the single commit that replaces `manifest.json`, and browsers key their cache by that revision.
 
+The published bundles were exported from the night-2 LoRA (`kev-0.8b@2256796`, `kev-4b@4bc64c6`, `kev-9b@442e597`).
+Hub `main` later added the fitted temperature to `head.pt` without changing the adapter. The runtime applies those
+temperatures for those revisions even when an older `manifest.json` does not yet name `temperature`; re-running
+`build_model.sh` writes it into the manifest from `head.pt`.
+
 ## How It Works
 
 Kev is a Qwen3.5 base, a rank-16 LoRA and a small pointer head. The head scores each option's `</opt>` hidden state
-against the question's `<decide>` hidden state. Nothing is generated, so one forward pass is the whole job.
+against the question's `<decide>` hidden state, then divides the logits by a temperature fitted on that checkpoint's
+in-distribution development rows (about 2.1–2.4, stored in `head.pt` and written into `manifest.json` on export).
+Nothing is generated, so one forward pass is the whole job.
 
 Qwen3.5 mixes Gated DeltaNet (recurrent) layers with full attention, so Kev serves hybrid models in rows. The state
 runs once, and each question runs as a continuation of the state's cache
@@ -125,14 +136,15 @@ weights from Hugging Face unless `VITE_MODEL_BASE` or `?models=<url>` says other
 WASM fallback runs single-threaded; WebGPU is unaffected.
 
 `kev.systemOne(req, { onAnswer })` reports each question as it finishes, so a UI can fill answers in as they land.
-`kev.systemOneSeparate()` answers each question in its own pass. `kev.probs(record)` returns raw probabilities.
+`kev.systemOneSeparate()` answers each question in its own pass. `kev.probs(record)` returns probabilities after the
+checkpoint temperature. `kev.systemOne(req, { dateFacts: true })` is `KEV_DATE_FACTS=1`.
 Weight files are cached in Cache Storage (`kev-web-v1`). In the demo page, `window.kev.systemOne(...)` works from
 the console, and `?verbose` logs where onnxruntime placed each node.
 
 ## Testing
 
 ```bash
-npm test                                   # rendering, tokenization and encoding parity; full runtime on onnxruntime-node
+npm test                                   # rendering, tokenization, encoding, date_facts, temperature; full runtime on onnxruntime-node
 KEV_VARIANTS=fp32 npm test                 # just the exact variant
 KEV_MODEL=kev-4b npm test                  # fixtures/kev-4b.json against public/models/kev-4b
 cd export && uv run python -m kev_web_export.parity --model build/kev-0.8b/web-q8f32/model.onnx \
@@ -161,7 +173,6 @@ real browser: `node scripts/cdp.mjs '<expression>'` evaluates in the tab (`MATCH
   fetches 2 files at a time.
   Kev-4B needs a GPU with enough memory for about 4.5 GB of weights. Only Chrome was tested; Safari and Firefox
   WebGPU are untested.
-- Kev-9B is not packaged. At int8 it would be about 10 GB.
 - onnxruntime-node 1.30 on Node 24+ reads 0 bytes from `Float16Array` float16 tensors, so the tests hide
   `Float16Array` (`test/no-float16.ts`). Browsers are not affected.
 - Requests run one at a time per model instance.

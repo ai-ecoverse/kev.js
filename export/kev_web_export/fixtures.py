@@ -2,7 +2,7 @@
 
 Each fixture keeps the API request, the rendered record, Kev's token encoding and the per-question probabilities, so
 the JS port can be checked stage by stage: rendering, tokenization/encoding, then the model itself."""
-import argparse, json, random
+import argparse, json, os, random
 import torch
 from . import KEV_ROOT  # noqa: F401
 from .pin import pin
@@ -66,6 +66,8 @@ def main():
     a = ap.parse_args()
     a.run = pin(a.run)
     print(f"run: {a.run}")
+    # raw logits: ONNX parity is against T=1. Serving applies the checkpoint temperature after the pointer head.
+    os.environ["KEV_TEMPERATURE"] = "1.0"
     tok, m = load(a.run, "cpu")
     fixtures = []
     for fx in HAND + load_dev(a.suite, a.n, a.seed):

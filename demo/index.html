@@ -43,6 +43,7 @@
       <section class="panel">
         <div class="row">
           <label>Preset <select id="preset"></select></label>
+          <label class="chk" title="KEV_DATE_FACTS: append day counts between absolute dates in the state"><input type="checkbox" id="date-facts" /> Date facts</label>
           <span class="spacer"></span>
           <button id="run" disabled title="⌘↵">Run</button>
           <button id="separate" disabled title="each question in its own pass">Packed vs separate</button>
@@ -119,7 +120,10 @@ res.answers.frustration.score;         // 1.46   expected level, 0-based</code><
       <code>state</code> and <code>instructions</code> also accept objects and arrays, which are rendered as labelled
       text. Other methods: <code>systemOne(req, { onAnswer })</code> reports each question as it finishes,
       <code>systemOneSeparate(req)</code> runs every question in its own pass, and <code>probs(record)</code> returns
-      raw probabilities. The shapes match Kev's <code>POST /v1/systemone</code>, so the TypeSafe SDK's examples carry over.
+      raw probabilities. Pass <code>{ dateFacts: true }</code> to append day counts between absolute dates in the
+      state (Kev's <code>KEV_DATE_FACTS=1</code>). The pointer head applies the checkpoint's fitted temperature
+      (about 2.1–2.4) unless you set <code>temperature: 1</code> for the raw logits. The shapes match Kev's
+      <code>POST /v1/systemone</code>, so the TypeSafe SDK's examples carry over.
     </p>
   </section>
 

@@ -49,6 +49,7 @@ def main():
     kev = {
         "run": a.run, "base": meta["base"], "base_revision": meta.get("base_revision"), "lora": meta.get("lora"),
         "hidden_size": m.lm.config.hidden_size, "head_dim": meta.get("head_dim", 256),
+        "temperature": float(meta.get("temperature", 1.0)),
         "special": {name: tok.convert_tokens_to_ids(t) for name, t in zip(["state", "q", "opt", "opt_end", "decide"], SPECIAL)},
         "max_state": MAX_STATE, "max_branch": MAX_BRANCH, "pad_id": tok.pad_token_id if tok.pad_token_id is not None else 0,
     }

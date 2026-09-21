@@ -4,7 +4,7 @@
 
 import type { InferenceSession, Tensor, TypedTensor } from "onnxruntime-common";
 import { Tokenizer } from "@huggingface/tokenizers";
-import { pyJsonDumps, toAnswers, toRecord, validate, type Answer, type DecisionRecord, type SystemOneRequest, type SystemOneResponse } from "./api.ts";
+import { pyJsonDumps, toAnswers, toRecord, validate, withDateFacts, type Answer, type DecisionRecord, type SystemOneRequest, type SystemOneResponse } from "./api.ts";
 import { encode, type Encoding, type EncodeOptions, type SpecialTokens } from "./encode.ts";
 import { PointerHead } from "./head.ts";
 
@@ -44,15 +44,45 @@ export interface KevManifest {
   special: SpecialTokens;
   max_state: number;
   max_branch: number;
+  /** Fitted pointer-head temperature from head.pt. Absent on bundles exported before 2026-09-21. */
+  temperature?: number;
   files: { head: string; tokenizer: string; tokenizer_config: string };
   variants: Record<string, VariantManifest>;
 }
 
 export interface KevOptions extends EncodeOptions {
-  /** kev.serve's KEV_TEMPERATURE: p^(1/T) renormalised. Default 1 (off). */
+  /** Override the checkpoint temperature. Unset = manifest.temperature, else the night-2 fitted value, else 1 (raw). */
   temperature?: number;
+  /** kev.serve's KEV_DATE_FACTS: append day counts between absolute dates in the state. Default false. */
+  dateFacts?: boolean;
   /** states whose caches are kept for reuse (LRU). Default 4, like kev.serve. 0 disables. */
   stateCacheSize?: number;
+}
+
+/** Night-2 Qwen3.5 checkpoints: the same LoRA later gained a fitted T in head.pt (2026-09-21 calibration republish). */
+const NIGHT2_TEMPERATURE: { sha: string; t: number }[] = [
+  { sha: "225679690cdd1de6fceb1258b1bddf61c493cee9", t: 2.406050072164233 },
+  { sha: "54f4f8777356cd5bbbb6c6919c657f26e6f2f6d8", t: 2.406050072164233 },
+  { sha: "d842b1f6c7d8780d0686b9730381b422fe0308a0", t: 2.406050072164233 },
+  { sha: "4bc64c6b4c4881148661ffb823ce21fcfdc79a0e", t: 2.1435469250725863 },
+  { sha: "e226ccc58b9a4ae9fbbb272cf0d1d0ce6412fe54", t: 2.1435469250725863 },
+  { sha: "485ace8703592fcf405488b262449990824cfed1", t: 2.1435469250725863 },
+  { sha: "70dd4088ebf4eb82d15ef57a863a5b9a98b94d6c", t: 2.1435469250725863 },
+  { sha: "442e597d71840506c326c8c2f5eedd42aeac7bbd", t: 2.2973967099940698 },
+  { sha: "3cf1ab729d2b7bd678ec11cbbcdcb78c71fe4b95", t: 2.2973967099940698 },
+  { sha: "2629c06a5aeb0feb3b9783bafed17ed8f39ecf5c", t: 2.2973967099940698 },
+  { sha: "b54583620720cf4766b81100075f732b20789127", t: 2.2973967099940698 },
+];
+
+/** Resolve the serving temperature the way kev.evaluate.load does: explicit override, else checkpoint, else 1. */
+export function temperatureFor(run: string, manifestTemperature?: number): number {
+  if (manifestTemperature != null) return manifestTemperature;
+  const rev = run.includes("@") ? run.slice(run.indexOf("@") + 1).toLowerCase() : "";
+  if (!rev) return 1;
+  for (const { sha, t } of NIGHT2_TEMPERATURE) {
+    if (sha.startsWith(rev) || rev.startsWith(sha.slice(0, 7))) return t;
+  }
+  return 1;
 }
 
 type Past = Map<string, Tensor>;
@@ -84,7 +114,7 @@ export class Kev {
   private ort: OrtModule;
   private session: InferenceSession;
   private head: PointerHead;
-  private opts: Required<Pick<KevOptions, "temperature" | "stateCacheSize">> & EncodeOptions;
+  private opts: Required<Pick<KevOptions, "stateCacheSize" | "dateFacts">> & EncodeOptions;
   private cache = new Map<string, CachedState>();
   private queue: Promise<unknown> = Promise.resolve();
   private v: VariantManifest;
@@ -93,8 +123,12 @@ export class Kev {
     this.ort = a.ort; this.session = a.session; this.head = a.head; this.tokenizer = a.tokenizer;
     this.manifest = a.manifest; this.variant = a.variant; this.v = a.manifest.variants[a.variant];
     if (!this.v) throw new Error(`unknown variant ${a.variant}; have ${Object.keys(a.manifest.variants)}`);
-    this.opts = { temperature: 1, stateCacheSize: 4, maxState: 8192, maxBranch: 8192, ...a.options };
+    this.opts = { stateCacheSize: 4, dateFacts: false, maxState: 8192, maxBranch: 8192, ...a.options };
+    this.head.temperature = a.options?.temperature ?? temperatureFor(a.manifest.run, a.manifest.temperature);
   }
+
+  /** Serving temperature actually in use (checkpoint or override). */
+  get temperature() { return this.head.temperature; }
 
   /** Session options that keep the state caches on the GPU between runs (WebGPU); harmless elsewhere. */
   static sessionOptions(manifest: KevManifest, variant: string, gpu: boolean): InferenceSession.SessionOptions {
@@ -168,7 +202,7 @@ export class Kev {
           const out = await this.session.run(this.feeds(b.ids, b.pos, st.past, st.len), ["hidden_states"]);
           const h = toFloat32(out.hidden_states as TypedTensor<"float32">);
           const row = (i: number) => h.subarray(i * d, (i + 1) * d);
-          const p = this.head.probs(row(b.decide), b.opts.map(row), this.opts.temperature);
+          const p = this.head.probs(row(b.decide), b.opts.map(row));
           probs.push(p); onQuestion?.(i, p);
         }
       } finally {
@@ -189,8 +223,9 @@ export class Kev {
   }
 
   /** POST /v1/systemone. onAnswer fires per question, so a caller can show answers as they land. */
-  async systemOne(input: SystemOneRequest | unknown, opts: { onAnswer?: (id: string, answer: Answer, index: number) => void } = {}): Promise<SystemOneResponse> {
-    const req = validate(input);
+  async systemOne(input: SystemOneRequest | unknown, opts: { onAnswer?: (id: string, answer: Answer, index: number) => void; dateFacts?: boolean } = {}): Promise<SystemOneResponse> {
+    let req = validate(input);
+    if (opts.dateFacts ?? this.opts.dateFacts) req = { ...req, state: withDateFacts(req.state) };
     const { record, meta } = toRecord(req);
     const enc = this.encode(record);
     const t0 = performance.now();
@@ -205,11 +240,11 @@ export class Kev {
   }
 
   /** POST /v1/systemone/separate: each question in its own request against the same state. */
-  async systemOneSeparate(input: SystemOneRequest | unknown): Promise<SystemOneResponse> {
+  async systemOneSeparate(input: SystemOneRequest | unknown, opts: { dateFacts?: boolean } = {}): Promise<SystemOneResponse> {
     const req = validate(input);
     const merged: SystemOneResponse = { model: req.model ?? "kev-latest", answers: {}, usage: { input_tokens: 0, output_tokens: 0 }, latency_ms: 0 };
     for (const [id, q] of Object.entries(req.questions)) {
-      const r = await this.systemOne({ ...req, questions: { [id]: q } });
+      const r = await this.systemOne({ ...req, questions: { [id]: q } }, opts);
       Object.assign(merged.answers, r.answers);
       merged.usage.input_tokens += r.usage.input_tokens; merged.latency_ms += r.latency_ms;
     }

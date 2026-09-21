@@ -120,7 +120,7 @@ worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
     const model = $<HTMLSelectElement>("model").value;
     store.set(cacheKey(model, m.variant), revisions.get(model) ?? "");
     void refreshVariants();
-    status(`Ready · ${m.variant} on ${m.device} · load ${(m.loadMs / 1000).toFixed(1)} s, warm-up ${(m.warmupMs / 1000).toFixed(1)} s`);
+    status(`Ready · ${m.variant} on ${m.device} · T=${m.temperature.toFixed(2)} · load ${(m.loadMs / 1000).toFixed(1)} s, warm-up ${(m.warmupMs / 1000).toFixed(1)} s`);
     setBusy(false);
   } else if (m.type === "partial") {
     pending.get(m.id)?.onPartial?.(m.qid, m.answer as Answer);
@@ -135,7 +135,8 @@ worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
 
 function systemOne(req: unknown, mode: "packed" | "separate" | "probs" = "packed", onPartial?: (qid: string, a: Answer) => void): Promise<SystemOneResponse> {
   const id = nextId++;
-  return new Promise((resolve, reject) => { pending.set(id, { resolve, reject, onPartial }); send({ type: "run", id, request: req, mode }); });
+  const dateFacts = $<HTMLInputElement>("date-facts").checked;
+  return new Promise((resolve, reject) => { pending.set(id, { resolve, reject, onPartial }); send({ type: "run", id, request: req, mode, dateFacts }); });
 }
 // console access: await kev.systemOne({...})
 (window as unknown as { kev: unknown }).kev = { systemOne: (r: unknown) => systemOne(r), systemOneSeparate: (r: unknown) => systemOne(r, "separate"), probs: (rec: unknown) => systemOne(rec, "probs") };

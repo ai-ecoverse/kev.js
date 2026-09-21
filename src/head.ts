@@ -19,16 +19,19 @@ export function parseSafetensors(buf: ArrayBuffer): Record<string, F32Tensor> {
 export class PointerHead {
   readonly d: number;
   readonly dp: number;
+  /** Checkpoint temperature: logits are divided by this at inference. 1 = raw. Fitted on in-distribution dev rows. */
+  temperature = 1;
   private qw: Float32Array; private qb: Float32Array; private kw: Float32Array; private kb: Float32Array;
 
-  constructor(weights: Record<string, F32Tensor>) {
+  constructor(weights: Record<string, F32Tensor>, temperature = 1) {
     const q = weights["q.weight"], k = weights["k.weight"];
     if (!q || !k) throw new Error("head weights must contain q.weight and k.weight");
     [this.dp, this.d] = q.shape;
     this.qw = q.data; this.qb = weights["q.bias"].data; this.kw = k.data; this.kb = weights["k.bias"].data;
+    this.temperature = temperature;
   }
 
-  static fromSafetensors(buf: ArrayBuffer) { return new PointerHead(parseSafetensors(buf)); }
+  static fromSafetensors(buf: ArrayBuffer, temperature = 1) { return new PointerHead(parseSafetensors(buf), temperature); }
 
   private project(w: Float32Array, b: Float32Array, h: Float32Array): Float64Array {
     const out = new Float64Array(this.dp);
@@ -52,8 +55,8 @@ export class PointerHead {
     });
   }
 
-  /** Softmax probabilities; temperature != 1 matches kev.serve's KEV_TEMPERATURE (p^(1/T), renormalised). */
-  probs(hDecide: Float32Array, hOpts: Float32Array[], temperature = 1): number[] {
+  /** Softmax of logits / T. T != 1 is kev.serve's built-in calibration (equivalent to p^(1/T) renormalised). */
+  probs(hDecide: Float32Array, hOpts: Float32Array[], temperature = this.temperature): number[] {
     const z = this.logits(hDecide, hOpts).map((x) => x / temperature);
     const m = Math.max(...z);
     const e = z.map((x) => Math.exp(x - m));

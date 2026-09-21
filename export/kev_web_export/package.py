@@ -87,7 +87,8 @@ def main():
             rel = os.path.relpath(os.path.join(root, f), a.out)
             if rel not in keep: os.remove(os.path.join(root, f)); print("removed stale", rel)
         if root != a.out and not os.listdir(root): os.rmdir(root)
-    manifest = {"name": os.path.basename(os.path.normpath(a.out)), **{k: kev[k] for k in ("run", "base", "hidden_size", "head_dim", "special", "max_state", "max_branch")},
+    keys = ("run", "base", "hidden_size", "head_dim", "special", "max_state", "max_branch", "temperature")
+    manifest = {"name": os.path.basename(os.path.normpath(a.out)), **{k: kev[k] for k in keys if k in kev},
                 "files": {"head": f"{r}/head.safetensors", "tokenizer": f"{r}/tokenizer.json", "tokenizer_config": f"{r}/tokenizer_config.json"},
                 "variants": variants}
     json.dump(manifest, open(f"{a.out}/manifest.json", "w"), indent=2)
