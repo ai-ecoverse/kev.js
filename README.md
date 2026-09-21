@@ -93,27 +93,21 @@ every question, and by later requests with the same state (LRU of 4, as in `kev.
 
 ## Quick Start
 
-You need Python 3.12 with [uv](https://docs.astral.sh/uv/), Node 20+, and about 20 GB of disk for Kev-0.8B.
+Using the library needs nothing but `npm install @ai-ecoverse/kev.js onnxruntime-web` and the published weights.
+Building the weights yourself needs Python 3.12 with [uv](https://docs.astral.sh/uv/) and a lot of disk (Kev-0.8B
+about 20 GB, Kev-4B about 45 GB, Kev-9B about 85 GB at peak):
 
 ```bash
 git clone --recursive https://github.com/ai-ecoverse/kev.js && cd kev.js
 cd export && uv sync
-uv run python -m kev_web_export.merge --run jaredpalmer/kev-0.8b --out build/kev-0.8b
-./build.sh build/kev-0.8b fp32-cpu q8f32-webgpu q8f16-webgpu fp16-webgpu
-uv run python -m kev_web_export.postprocess --src build/kev-0.8b/onnx-q8f32-webgpu --out build/kev-0.8b/web-q8f32
-uv run python -m kev_web_export.postprocess --src build/kev-0.8b/onnx-q8f16-webgpu --out build/kev-0.8b/web-q8
-uv run python -m kev_web_export.postprocess --src build/kev-0.8b/onnx-fp16-webgpu --out build/kev-0.8b/web-fp16 --embed keep
-uv run python -m kev_web_export.package --build build/kev-0.8b --out ../public/models/kev-0.8b \
-    --variant q8f32=web-q8f32 --variant q8=web-q8 --variant fp16=web-fp16 --variant fp32=onnx-fp32-cpu \
-    --fixtures ../fixtures/kev-0.8b.json
-cd .. && npm install && npm run dev      # http://127.0.0.1:5173
+./build_model.sh kev-0.8b                  # or kev-4b, kev-9b; optionally a pinned run: jaredpalmer/kev-4b@<sha>
+cd .. && npm install && npm run dev        # http://127.0.0.1:5173, serving public/models
 ```
 
-On macOS the builder can abort with `recursive_mutex lock failed` after it has written everything.
-`build.sh` checks for `genai_config.json` instead of relying on the exit code.
-
-Kev-4B uses the same steps with `--run jaredpalmer/kev-4b --out build/kev-4b` and only the `fp32-cpu` and
-`q8f32-webgpu` builds, and about 45 GB of disk for the merged checkpoint, the fp32 reference and the int8 build.
+`build_model.sh` pins the checkpoint, merges the LoRA in fp32, builds the int8 WebGPU graph, shards it, builds the
+fp32 reference, writes the PyTorch fixtures and the 300-record reference set, measures parity and packages the bundle
+into `public/models/<name>`. On macOS the onnxruntime-genai builder can abort with `recursive_mutex lock failed`
+after it has written everything, so `build.sh` checks for `genai_config.json` instead of the exit code.
 
 ### Publishing
 
