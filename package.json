@@ -1,0 +1,28 @@
+{
+  "name": "kev-web",
+  "version": "0.1.0",
+  "description": "Kev decision models in the browser: WebGPU/WASM via onnxruntime-web, TypeSafe System One API",
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "vite demo",
+    "build": "vite build demo",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@huggingface/tokenizers": "0.2.0",
+    "onnxruntime-web": "1.30.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.2",
+    "onnxruntime-node": "1.30.0",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vite": "8.3.0"
+  }
+}

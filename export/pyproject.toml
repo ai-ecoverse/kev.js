@@ -1,0 +1,25 @@
+[project]
+name = "kev-web-export"
+version = "0.1.0"
+description = "Merge a Kev checkpoint and export it to ONNX for the browser runtime"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    # kev itself is vendored at ../vendor/kev (git submodule) and put on sys.path by kev_web_export/__init__.py
+    "accelerate>=1.15.0",
+    "datasets>=3.0",
+    "scikit-learn>=1.9.1",
+    "numpy>=2.5.3",
+    "peft>=0.21",
+    "pydantic>=2.9",
+    "torch>=2.6,<2.9",
+    "transformers>=5.17,<6",
+    "onnxruntime-genai>=0.16",
+    "onnxruntime>=1.23",
+    "onnx>=1.19",
+    "onnx-ir",
+    "safetensors",
+    "huggingface_hub",
+]
+
+[tool.uv]
+package = false

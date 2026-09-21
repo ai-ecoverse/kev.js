@@ -1,0 +1,7 @@
+build/
+dist/
+node_modules/
+dist-demo/
+.playwright-cli/
+__pycache__/
+.venv/

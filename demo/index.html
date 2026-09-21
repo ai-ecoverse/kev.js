@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Kev in the browser</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <header>
+    <h1>Kev <span>in the browser</span></h1>
+    <p>Kev decision models on WebGPU/WASM. Nothing leaves this tab.</p>
+  </header>
+  <section id="loader" class="panel">
+    <label>Model <select id="model"></select></label>
+    <label>Variant <select id="variant"></select></label>
+    <label>Device <select id="device"><option value="webgpu">WebGPU</option><option value="wasm">WASM (CPU)</option></select></label>
+    <button id="load">Load</button>
+    <div id="progress"><div id="bar"></div></div>
+    <p id="status">Not loaded.</p>
+  </section>
+  <main>
+    <section class="panel">
+      <div class="row">
+        <label>Preset <select id="preset"></select></label>
+        <span class="spacer"></span>
+        <button id="run" disabled title="⌘↵">Run</button>
+        <button id="separate" disabled title="each question in its own pass">Packed vs separate</button>
+      </div>
+      <textarea id="request" spellcheck="false"></textarea>
+    </section>
+    <section class="panel">
+      <div id="answers"><p class="muted">Answers appear here.</p></div>
+      <details><summary>Response JSON</summary><pre id="raw"></pre></details>
+    </section>
+  </main>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>
