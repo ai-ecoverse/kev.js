@@ -53,9 +53,11 @@ test("a file cut short in OPFS fails the load by name", async ({ page }) => {
 
 for (const ep of ["wasm", "webgpu"] as const) {
   test(`Kev-0.8B q8f32 from OPFS on ${ep} matches the PyTorch reference`, async ({ page }) => {
-    test.setTimeout(20 * 60_000);
-    // every fixture by default (WASM: about a second each); KEV_BROWSER_FIXTURES caps the count for a slow adapter
-    const limit = Number(process.env.KEV_BROWSER_FIXTURES) || undefined;
+    test.setTimeout(40 * 60_000);
+    // every fixture by default (WASM: 1-3 s each). KEV_WEBGPU_FIXTURES caps WebGPU alone: on SwiftShader, the CPU
+    // Vulkan that CI's GPU-less runners have, one fixture takes about 150 s. KEV_BROWSER_FIXTURES caps both.
+    const cap = (ep === "webgpu" && Number(process.env.KEV_WEBGPU_FIXTURES)) || Number(process.env.KEV_BROWSER_FIXTURES);
+    const limit = cap || undefined;
     const r = await run(page, "model", { ep, limit });
     console.log(`[${ep}] ${r.skip ?? `copied ${r.copied} files into OPFS`}`);
     if (r.skip) {

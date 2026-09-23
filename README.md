@@ -172,7 +172,9 @@ synthetic bundle into the browser's OPFS and load it through a directory handle 
 Kev-0.8B bundle into OPFS, load it from there on WASM and on WebGPU, and compare with the PyTorch fixtures; they also
 check that no model file was fetched and nothing went to Cache Storage. Without a bundle, or without a WebGPU adapter,
 those skip; `KEV_REQUIRE_MODEL=1` and `KEV_REQUIRE_WEBGPU=1` make that a failure. CI downloads the bundle (cached per
-published manifest) and runs the Node and browser suites against it, with WebGPU on SwiftShader.
+published manifest) and runs the Node and browser suites against it. Its runners have no GPU, so WebGPU runs on
+SwiftShader (a CPU Vulkan): that checks the WebGPU kernels' results, not GPU speed, at about 150 s per fixture, so CI
+runs two (`KEV_WEBGPU_FIXTURES`). `KEV_WEBGPU_SWIFTSHADER=1` forces that adapter locally.
 
 `scripts/cdp.mjs` drives a page in a Chrome started with `--remote-debugging-port=9222`, for checking the demo in a
 real browser: `node scripts/cdp.mjs '<expression>'` evaluates in the tab (`MATCH=` picks it by URL), and

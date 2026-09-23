@@ -134,7 +134,8 @@ const cases = {
     const t1 = performance.now();
     let kev;
     try {
-      kev = await loadKev(dir, { ort: ort as unknown as OrtModule, variant, executionProviders: [ep], temperature: 1 });
+      kev = await loadKev(dir, { ort: ort as unknown as OrtModule, variant, executionProviders: [ep], temperature: 1,
+        onPhase: (phase) => say(`${model} ${variant} ${ep}: ${phase} at ${Math.round(performance.now() - t1)} ms`) });
     } finally {
       globalThis.fetch = realFetch;
     }
@@ -145,7 +146,8 @@ const cases = {
     const parity = new Parity();
     const t2 = performance.now();
     const sample = fx.fixtures.slice(0, o.limit ?? fx.fixtures.length);
-    for (const f of sample) {
+    for (const [i, f] of sample.entries()) {
+      if (i < 2 || i % 10 === 0) say(`${model} ${variant} ${ep}: fixture ${i} at ${Math.round(performance.now() - t2)} ms`);
       (await kev.probs(f.record)).forEach((p, k) => parity.add(`${f.name} q${k}`, f.probs[k], p));
     }
     const msPerFixture = (performance.now() - t2) / sample.length;
