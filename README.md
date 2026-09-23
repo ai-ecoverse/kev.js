@@ -161,9 +161,18 @@ the console, and `?verbose` logs where onnxruntime placed each node.
 npm test                                   # rendering, tokenization, encoding, date_facts, temperature; full runtime on onnxruntime-node
 KEV_VARIANTS=fp32 npm test                 # just the exact variant
 KEV_MODEL=kev-4b npm test                  # fixtures/kev-4b.json against public/models/kev-4b
+npm run fetch-model -- kev-0.8b q8f32      # published bundle -> public/models/kev-0.8b (resumes; keeps files at size)
+npx playwright install chromium && npm run test:browser   # Chromium: loadKev from the real OPFS, the model on WASM and WebGPU
 cd export && uv run python -m kev_web_export.parity --model build/kev-0.8b/web-q8f32/model.onnx \
     --head build/kev-0.8b/head.safetensors --fixtures ../fixtures/kev-0.8b.json
 ```
+
+The browser tests (`test/browser`, Playwright) run their cases in a module worker, as the demo does. Three write a
+synthetic bundle into the browser's OPFS and load it through a directory handle and a read function. Two copy the
+Kev-0.8B bundle into OPFS, load it from there on WASM and on WebGPU, and compare with the PyTorch fixtures; they also
+check that no model file was fetched and nothing went to Cache Storage. Without a bundle, or without a WebGPU adapter,
+those skip; `KEV_REQUIRE_MODEL=1` and `KEV_REQUIRE_WEBGPU=1` make that a failure. CI downloads the bundle (cached per
+published manifest) and runs the Node and browser suites against it, with WebGPU on SwiftShader.
 
 `scripts/cdp.mjs` drives a page in a Chrome started with `--remote-debugging-port=9222`, for checking the demo in a
 real browser: `node scripts/cdp.mjs '<expression>'` evaluates in the tab (`MATCH=` picks it by URL), and

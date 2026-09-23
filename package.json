@@ -42,6 +42,8 @@
     "build:demo": "vite build demo",
     "typecheck": "tsc --noEmit -p .",
     "test": "node --import tsx --test test/*.test.ts",
+    "test:browser": "playwright test",
+    "fetch-model": "node --import tsx scripts/fetch-model.ts",
     "release": "semantic-release"
   },
   "dependencies": {
@@ -51,6 +53,7 @@
     "onnxruntime-common": ">=1.30.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@semantic-release/changelog": "^7.0.0",
     "@semantic-release/git": "^11.0.1",
     "@types/node": "^26.0.0",

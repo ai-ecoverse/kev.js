@@ -18,3 +18,32 @@ jobs:
       # rendering, tokenization and encoding parity against the Python fixtures; the model tests need the weight
       # bundles (public/models), which are not in the repo, and skip without them
       - run: npm test
+
+  # The published Kev-0.8B q8f32 bundle, verified rather than assumed: the Node runtime and the browser runtime
+  # (Chromium, onnxruntime-web on WASM and on WebGPU) against the PyTorch fixtures, and loadKev from the real OPFS.
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      # weights are cached per published manifest: a new checkpoint on Hugging Face is a new key
+      - id: bundle
+        run: echo "key=kev-0.8b-q8f32-$(curl -fsSL --retry 4 https://huggingface.co/ai-ecoverse/kev.js/resolve/main/kev-0.8b/manifest.json | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with: { path: public/models/kev-0.8b, key: "${{ steps.bundle.outputs.key }}" }
+      - run: npm run fetch-model -- kev-0.8b q8f32
+      - run: npm test
+        env: { KEV_VARIANTS: q8f32 }
+      - id: playwright
+        run: echo "version=$(npx playwright --version | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with: { path: ~/.cache/ms-playwright, key: "playwright-${{ steps.playwright.outputs.version }}" }
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+        env: { KEV_REQUIRE_MODEL: "1", KEV_REQUIRE_WEBGPU: "1" }
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with: { name: playwright-results, path: test-results/, retention-days: 7 }

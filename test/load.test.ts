@@ -6,41 +6,10 @@ import { readFile } from "node:fs/promises";
 import * as ort from "onnxruntime-node";
 import { loadKev, modelFiles, type KevManifest, type OrtModule, type Progress, type ReadModelFile } from "../src/index.ts";
 import { fixtures, haveModel, modelDir, tokenizerFiles } from "./fixtures.ts";
+import { stubOrt, syntheticBundle, withoutFetch } from "./synthetic.ts";
 
-/** A safetensors file with a 2 x 3 pointer head. */
-function headFile(): Uint8Array {
-  const t = (off: number, shape: number[]) => ({ dtype: "F32", shape, data_offsets: [off * 4, (off + shape.reduce((a, b) => a * b)) * 4] });
-  const header = new TextEncoder().encode(JSON.stringify({ "q.weight": t(0, [2, 3]), "q.bias": t(6, [2]), "k.weight": t(8, [2, 3]), "k.bias": t(14, [2]) }));
-  const out = new Uint8Array(8 + header.length + 16 * 4);
-  new DataView(out.buffer).setBigUint64(0, BigInt(header.length), true);
-  out.set(header, 8);
-  return out;
-}
-
-/** A bundle as kev_web_export.package lays it out, with placeholder graph and weight bytes. */
-async function bundle(): Promise<Map<string, Uint8Array>> {
-  const tok = await tokenizerFiles();
-  const enc = (s: string) => new TextEncoder().encode(s);
-  const files = new Map<string, Uint8Array>([
-    ["r-abc/tokenizer.json", enc(tok.tokenizer)], ["r-abc/tokenizer_config.json", enc(tok.tokenizer_config)],
-    ["r-abc/head.safetensors", headFile()], ["r-abc/v/model.onnx", enc("graph")],
-    ["r-abc/v/model.onnx.data_0", enc("shard zero")], ["r-abc/v/model.onnx.data_1", enc("shard one!")],
-  ]);
-  const sizes = Object.fromEntries([...files].map(([p, b]) => [p, b.length]));
-  const manifest: Partial<KevManifest> = {
-    name: "kev-test", run: "jaredpalmer/kev-test@abc", special: { state: 1, q: 2, opt: 3, opt_end: 4, decide: 5 } as KevManifest["special"],
-    files: { head: "r-abc/head.safetensors", tokenizer: "r-abc/tokenizer.json", tokenizer_config: "r-abc/tokenizer_config.json" },
-    variants: { v: { model: "r-abc/v/model.onnx", data: ["r-abc/v/model.onnx.data_0", "r-abc/v/model.onnx.data_1"], bytes: 20, io_dtype: "float32", sizes, inputs: [], outputs: [] } },
-  };
-  files.set("manifest.json", enc(JSON.stringify(manifest)));
-  return files;
-}
-
-/** An ort whose InferenceSession.create records what it was given. */
-function stubOrt() {
-  const created: { graph: Uint8Array; options: { externalData?: { path: string; data: Uint8Array }[] } }[] = [];
-  const mod = { InferenceSession: { create: async (graph: Uint8Array, options: object) => { created.push({ graph, options }); return { release: async () => {} }; } } };
-  return { ort: mod as unknown as OrtModule, created };
+async function bundle() {
+  return syntheticBundle(await tokenizerFiles());
 }
 
 /** A FileSystemDirectoryHandle over a path -> bytes map, the parts loadKev uses: nested directories, files as Blobs. */
@@ -58,12 +27,6 @@ function directory(files: Map<string, Uint8Array>, prefix = ""): FileSystemDirec
       return { kind: "file", name, getFile: async () => new Blob([bytes as BlobPart]) };
     },
   } as unknown as FileSystemDirectoryHandle;
-}
-
-async function withoutFetch<T>(fn: () => Promise<T>): Promise<T> {
-  const real = globalThis.fetch;
-  globalThis.fetch = (async (input: RequestInfo | URL) => { throw new Error(`unexpected fetch ${String(input)}`); }) as typeof fetch;
-  try { return await fn(); } finally { globalThis.fetch = real; }
 }
 
 test("loadKev reads every file from a read function, by bundle path, without fetch", async () => {
