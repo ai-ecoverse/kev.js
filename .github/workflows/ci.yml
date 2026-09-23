@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with: { submodules: true }
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: npm }
       - run: npm ci
       - run: npm run typecheck
@@ -26,7 +26,7 @@ jobs:
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: npm }
       - run: npm ci
       # weights are cached per published manifest: a new checkpoint on Hugging Face is a new key
