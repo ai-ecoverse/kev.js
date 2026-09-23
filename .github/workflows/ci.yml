@@ -32,7 +32,7 @@ jobs:
       # weights are cached per published manifest: a new checkpoint on Hugging Face is a new key
       - id: bundle
         run: echo "key=kev-0.8b-q8f32-$(curl -fsSL --retry 4 https://huggingface.co/ai-ecoverse/kev.js/resolve/main/kev-0.8b/manifest.json | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with: { path: public/models/kev-0.8b, key: "${{ steps.bundle.outputs.key }}" }
       - run: npm run fetch-model -- kev-0.8b q8f32
       # int8 results depend on the CPU's kernels (AVX-512 or not): record which one this runner has
@@ -41,7 +41,7 @@ jobs:
         env: { KEV_VARIANTS: q8f32 }
       - id: playwright
         run: echo "version=$(npx playwright --version | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with: { path: ~/.cache/ms-playwright, key: "playwright-${{ steps.playwright.outputs.version }}" }
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
