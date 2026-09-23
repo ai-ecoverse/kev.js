@@ -1,3 +1,10 @@
+# [0.4.0](https://github.com/ai-ecoverse/kev.js/compare/v0.3.0...v0.4.0) (2026-09-23)
+
+
+### Features
+
+* **load:** load a bundle from a directory handle or a read function ([831fe2b](https://github.com/ai-ecoverse/kev.js/commit/831fe2b9a7f65d72fb978df335ba7d8ef126964e)), closes [ai-ecoverse/skills#423](https://github.com/ai-ecoverse/skills/issues/423)
+
 # [0.3.0](https://github.com/ai-ecoverse/kev.js/compare/v0.2.0...v0.3.0) (2026-09-23)
 
 
