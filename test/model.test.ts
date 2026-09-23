@@ -3,13 +3,16 @@
 import "./no-float16.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import * as ort from "onnxruntime-node";
 import { Kev, PointerHead, type KevManifest, type OrtModule } from "../src/index.ts";
 import { fixtures, haveModel, modelDir, tokenizer } from "./fixtures.ts";
+import { bounds, Parity } from "./parity.ts";
 
 const manifest: KevManifest | null = haveModel ? JSON.parse(readFileSync(`${modelDir}/manifest.json`, "utf8")) : null;
-const variants = process.env.KEV_VARIANTS?.split(",") ?? Object.keys(manifest?.variants ?? {});
+// default: the variants on disk (fetch-model downloads one); KEV_VARIANTS names them, and then a missing one fails
+const variants = process.env.KEV_VARIANTS?.split(",")
+  ?? Object.entries(manifest?.variants ?? {}).filter(([, v]) => existsSync(`${modelDir}/${v.model}`)).map(([name]) => name);
 
 async function load(variant: string): Promise<Kev> {
   const v = manifest!.variants[variant];
@@ -21,17 +24,16 @@ async function load(variant: string): Promise<Kev> {
 for (const variant of variants) {
   test(`${variant}: probabilities match the PyTorch reference`, { skip: !haveModel && "no bundle" }, async () => {
     const kev = await load(variant);
-    const bound = variant === "fp32" ? 1e-4 : (manifest!.variants[variant].parity?.max_abs_dp ?? 0.1) + 1e-3;
-    let worst = 0;
+    const parity = new Parity();
     for (const f of fixtures) {
       const r = await kev.systemOne(f.request);
       const probs = await kev.probs(f.record);   // second call: exercises the state cache
-      probs.forEach((p, k) => p.forEach((x, j) => { worst = Math.max(worst, Math.abs(x - f.probs[k][j])); }));
+      probs.forEach((p, k) => parity.add(`${f.name} q${k}`, f.probs[k], p));
       if (variant === "fp32") assert.deepEqual(Object.fromEntries(Object.entries(r.answers).map(([k, a]) => [k, a.type])), Object.fromEntries(Object.entries(f.answers).map(([k, a]) => [k, a.type])));
       assert.equal(r.usage.input_tokens, f.encoding.ids.length);
     }
-    console.log(`${variant}: max |dp| ${worst.toExponential(2)} over ${fixtures.length} fixtures`);
-    assert.ok(worst <= bound, `max |dp| ${worst} > ${bound}`);
+    console.log(`${variant}: ${parity.summary()}`);
+    assert.deepEqual(parity.violations(bounds(manifest!, variant)), []);
     await kev.release();
   });
 }

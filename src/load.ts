@@ -1,6 +1,6 @@
-// Load a packaged Kev model (kev_web_export.package output) from a URL: manifest, tokenizer, head, ONNX graph and
-// its external weights. Weight files are large (0.8 GB for kev-0.8b q8), so they are kept in Cache Storage when
-// available and streamed with progress.
+// Load a packaged Kev model (kev_web_export.package output): manifest, tokenizer, head, ONNX graph and its external
+// weights. From a URL, weight files (0.8 GB for kev-0.8b q8) are kept in Cache Storage when available and streamed
+// with progress. A model already on disk (OPFS, a picked directory, a virtual file system) is read in place.
 
 import { Tokenizer } from "@huggingface/tokenizers";
 import type { InferenceSession } from "onnxruntime-common";
@@ -8,6 +8,14 @@ import { PointerHead } from "./head.ts";
 import { Kev, type KevManifest, type KevOptions, type OrtModule } from "./model.ts";
 
 export interface Progress { file: string; loaded: number; total: number }
+
+/** Reads one file of a packaged model by its path in the bundle ("manifest.json", "r-<sha>/q8f32/model.onnx"). */
+export type ReadModelFile = (path: string) => Promise<Uint8Array | ArrayBuffer | Blob>;
+
+/** Where loadKev reads a model: a base URL (fetched, kept in Cache Storage), a directory holding the bundle (OPFS via
+ * navigator.storage.getDirectory(), or showDirectoryPicker()), or a function that reads a file by its bundle path. The
+ * last two are read in place: no fetch, no Cache Storage. */
+export type ModelSource = string | FileSystemDirectoryHandle | ReadModelFile;
 
 /** Coarse stage of loadKev, for a status line that keeps moving after the download finishes. */
 export type LoadPhase = "manifest" | "download" | "session" | "ready";
@@ -20,7 +28,7 @@ export interface LoadOptions extends KevOptions {
   executionProviders?: InferenceSession.SessionOptions["executionProviders"];
   onProgress?: (p: Progress) => void;
   onPhase?: (phase: LoadPhase) => void;
-  /** Cache Storage bucket for model files; null disables caching. Default "kev-web-v1". */
+  /** Cache Storage bucket for model files; null disables caching. Default "kev-web-v1". Only URL sources are cached. */
   cacheName?: string | null;
   sessionOptions?: InferenceSession.SessionOptions;
   /** weight files fetched at once. Default 2: on a bandwidth-limited link more streams are slower in aggregate
@@ -75,6 +83,37 @@ export async function fetchFile(url: string, o: { cacheName?: string | null; onP
   return data;
 }
 
+/** A ReadModelFile over a directory that holds the bundle as published (manifest.json at its root). */
+export function directoryReader(dir: FileSystemDirectoryHandle): ReadModelFile {
+  return async (path) => {
+    const parts = path.split("/").filter(Boolean);
+    let d = dir;
+    for (const part of parts.slice(0, -1)) d = await d.getDirectoryHandle(part);
+    return (await d.getFileHandle(parts[parts.length - 1])).getFile();
+  };
+}
+
+/** Every file a variant loads besides manifest.json, with its size when the manifest records one. A download or resume
+ * step can fetch exactly these, and skip those already at their size. */
+export function modelFiles(manifest: KevManifest, variant = Object.keys(manifest.variants)[0]): { path: string; bytes?: number }[] {
+  const v = manifest.variants[variant];
+  if (!v) throw new Error(`unknown variant ${variant}; have ${Object.keys(manifest.variants).join(", ")}`);
+  return [manifest.files.tokenizer, manifest.files.tokenizer_config, manifest.files.head, v.model, ...v.data]
+    .map((path) => ({ path, bytes: v.sizes?.[path] }));
+}
+
+/** One file from a local source, as bytes. Views and buffers may come from another realm (a VFS over postMessage), so
+ * they are recognised by shape rather than instanceof. */
+async function readLocal(read: ReadModelFile, file: string, o: { onProgress?: (p: Progress) => void; bytes?: number } = {}): Promise<Uint8Array> {
+  const got = await read(file);
+  const data = ArrayBuffer.isView(got) ? new Uint8Array(got.buffer, got.byteOffset, got.byteLength)
+    : typeof (got as Blob).arrayBuffer === "function" ? new Uint8Array(await (got as Blob).arrayBuffer())
+    : new Uint8Array(got as ArrayBuffer);
+  if (o.bytes && data.length !== o.bytes) throw new Error(`${file}: expected ${o.bytes} bytes, read ${data.length} (incomplete download?)`);
+  o.onProgress?.({ file, loaded: data.length, total: data.length });
+  return data;
+}
+
 const join = (base: string, path: string) => `${base.replace(/\/$/, "")}/${path}`;
 
 /** Delete this model's cached files from other revisions: a superseded checkpoint is gigabytes of quota. */
@@ -100,18 +139,22 @@ async function pool<T>(jobs: (() => Promise<T>)[], limit: number): Promise<T[]> 
   return out;
 }
 
-export async function loadKev(baseUrl: string, o: LoadOptions): Promise<Kev> {
+export async function loadKev(source: ModelSource, o: LoadOptions): Promise<Kev> {
+  const baseUrl = typeof source === "string" ? source : null;
+  const read = baseUrl !== null ? null : typeof source === "function" ? source : directoryReader(source as FileSystemDirectoryHandle);
   o.onPhase?.("manifest");
   const decode = (b: Uint8Array) => new TextDecoder().decode(b);
   // the manifest is always fetched fresh: it names the revision everything else is cached under
-  const manifest = JSON.parse(decode(await fetchFile(join(baseUrl, "manifest.json"), { cacheName: null }))) as KevManifest;
+  const manifest = JSON.parse(decode(read ? await readLocal(read, "manifest.json")
+    : await fetchFile(join(baseUrl!, "manifest.json"), { cacheName: null }))) as KevManifest;
   const variant = o.variant ?? Object.keys(manifest.variants)[0];
   const v = manifest.variants[variant];
   if (!v) throw new Error(`unknown variant ${variant}; have ${Object.keys(manifest.variants).join(", ")}`);
   o.onPhase?.("download");
   // announce every file up front so the total does not grow as downloads start
   for (const [p, bytes] of Object.entries(v.sizes ?? {})) o.onProgress?.({ file: p, loaded: 0, total: bytes });
-  const get = (p: string) => fetchFile(join(baseUrl, p), { cacheName: o.cacheName, onProgress: o.onProgress, file: p, bytes: v.sizes?.[p], rev: manifest.run });
+  const get = (p: string) => read ? readLocal(read, p, { onProgress: o.onProgress, bytes: v.sizes?.[p] })
+    : fetchFile(join(baseUrl!, p), { cacheName: o.cacheName, onProgress: o.onProgress, file: p, bytes: v.sizes?.[p], rev: manifest.run });
   const [tokJson, tokCfg] = (await Promise.all([get(manifest.files.tokenizer), get(manifest.files.tokenizer_config)])).map(decode);
   const [head, graph, ...data] = await pool([manifest.files.head, v.model, ...v.data].map((p) => () => get(p)), o.concurrency ?? 2);
   const tokenizer = new Tokenizer(JSON.parse(tokJson), JSON.parse(tokCfg));
@@ -124,7 +167,7 @@ export async function loadKev(baseUrl: string, o: LoadOptions): Promise<Kev> {
     externalData: v.data.map((p, i) => ({ path: p.split("/").pop()!, data: data[i] })),
     ...o.sessionOptions,
   });
-  await dropOtherRevisions(baseUrl, manifest.run, o.cacheName);
+  if (baseUrl !== null) await dropOtherRevisions(baseUrl, manifest.run, o.cacheName);
   o.onPhase?.("ready");
   return new Kev({ ort: o.ort, session, head: PointerHead.fromSafetensors(head.slice().buffer), tokenizer, manifest, variant, options: o });
 }

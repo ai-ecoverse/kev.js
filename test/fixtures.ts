@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, writeFileSync } from "node:fs";
+import { readFileSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,6 +43,12 @@ async function fetchText(url: string, attempts = 4): Promise<string> {
 /** The tokenizer the bundle ships: the local bundle or build output when present, else the published copy on Hugging
  * Face (cached in the OS temp dir), so CI can run the encoding tests without weights. */
 export async function tokenizer(): Promise<Tokenizer> {
+  const { tokenizer: tok, tokenizer_config: cfg } = await tokenizerFiles();
+  return new Tokenizer(JSON.parse(tok), JSON.parse(cfg));
+}
+
+/** tokenizer.json and tokenizer_config.json as text, from the same places as tokenizer(). */
+export async function tokenizerFiles(): Promise<{ tokenizer: string; tokenizer_config: string }> {
   // follow the manifest: files live under a revision directory (r-<sha>/)
   const read = async (f: "tokenizer" | "tokenizer_config") => {
     const localManifest = `${modelDir}/manifest.json`;
@@ -52,8 +58,13 @@ export async function tokenizer(): Promise<Tokenizer> {
     const manifest = JSON.parse(await fetchText(`${HF}/${model}/manifest.json`));
     const path = manifest.files[f] as string;
     const cached = join(tmpdir(), `kev-js-${model}-${path.replaceAll("/", "_")}`);   // path carries the revision
-    if (!existsSync(cached)) writeFileSync(cached, await fetchText(`${HF}/${model}/${path}`));
+    if (!existsSync(cached)) {
+      // test files run in parallel processes: write aside and rename, so no reader sees a partial file
+      const part = `${cached}.${process.pid}.part`;
+      writeFileSync(part, await fetchText(`${HF}/${model}/${path}`));
+      renameSync(part, cached);
+    }
     return readFileSync(cached, "utf8");
   };
-  return new Tokenizer(JSON.parse(await read("tokenizer")), JSON.parse(await read("tokenizer_config")));
+  return { tokenizer: await read("tokenizer"), tokenizer_config: await read("tokenizer_config") };
 }

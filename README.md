@@ -144,15 +144,37 @@ checkpoint temperature. `kev.systemOne(req, { dateFacts: true })` is `KEV_DATE_F
 Weight files are cached in Cache Storage (`kev-web-v1`). In the demo page, `window.kev.systemOne(...)` works from
 the console, and `?verbose` logs where onnxruntime placed each node.
 
+`loadKev` also reads a bundle that is already on disk, in place: pass a directory handle that holds it (OPFS, or
+`showDirectoryPicker()`) or a function that reads a file by its bundle path, instead of a URL. Nothing is fetched and
+nothing is copied into Cache Storage, so a 9 GB model is stored once. `modelFiles(manifest, variant)` lists the files a
+variant loads with their sizes, for a download or resume step; a local file of the wrong size fails the load by name.
+
+```ts
+const opfs = await (await navigator.storage.getDirectory()).getDirectoryHandle("kev-9b");
+const kev = await loadKev(opfs, { ort, variant: "q8f32" });
+// or through a virtual file system: loadKev((path) => fs.readFileBinary(`/models/kev-9b/${path}`), { ort })
+```
+
 ## Testing
 
 ```bash
 npm test                                   # rendering, tokenization, encoding, date_facts, temperature; full runtime on onnxruntime-node
 KEV_VARIANTS=fp32 npm test                 # just the exact variant
 KEV_MODEL=kev-4b npm test                  # fixtures/kev-4b.json against public/models/kev-4b
+npm run fetch-model -- kev-0.8b q8f32      # published bundle -> public/models/kev-0.8b (resumes; keeps files at size)
+npx playwright install chromium && npm run test:browser   # Chromium: loadKev from the real OPFS, the model on WASM and WebGPU
 cd export && uv run python -m kev_web_export.parity --model build/kev-0.8b/web-q8f32/model.onnx \
     --head build/kev-0.8b/head.safetensors --fixtures ../fixtures/kev-0.8b.json
 ```
+
+The browser tests (`test/browser`, Playwright) run their cases in a module worker, as the demo does. Three write a
+synthetic bundle into the browser's OPFS and load it through a directory handle and a read function. Two copy the
+Kev-0.8B bundle into OPFS, load it from there on WASM and on WebGPU, and compare with the PyTorch fixtures; they also
+check that no model file was fetched and nothing went to Cache Storage. Without a bundle, or without a WebGPU adapter,
+those skip; `KEV_REQUIRE_MODEL=1` and `KEV_REQUIRE_WEBGPU=1` make that a failure. CI downloads the bundle (cached per
+published manifest) and runs the Node and browser suites against it. Its runners have no GPU, so WebGPU runs on
+SwiftShader (a CPU Vulkan): that checks the WebGPU kernels' results, not GPU speed, at about 150 s per fixture, so CI
+runs two (`KEV_WEBGPU_FIXTURES`). `KEV_WEBGPU_SWIFTSHADER=1` forces that adapter locally.
 
 `scripts/cdp.mjs` drives a page in a Chrome started with `--remote-debugging-port=9222`, for checking the demo in a
 real browser: `node scripts/cdp.mjs '<expression>'` evaluates in the tab (`MATCH=` picks it by URL), and
