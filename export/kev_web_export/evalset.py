@@ -7,8 +7,7 @@ import numpy as np
 from . import KEV_ROOT  # noqa: F401
 from .pin import pin
 from kev.api import SystemOneRequest, to_record
-from kev.evaluate import load_tokenizer
-from kev.model import encode, rows_of
+from kev.model import encode, load_tokenizer, rows_of
 from .fixtures import load_dev
 from .ort_runtime import OrtKev
 

@@ -21,15 +21,15 @@ const res = await kev.systemOne({
   },
 });
 // Kev-0.8B (kev-0.8b@2256796), as served (T ≈ 2.41):
-res.answers.billing.noul;    // 1.0    probability of yes, rounded to 2 places like kev.serve
-res.answers.urgency.score;   // expected level: mostly "today"
+res.answers.billing.noul;    // 0.9102 probability of yes, rounded to 4 places like kev.serve
+res.answers.urgency.score;   // 1.482  expected level (0 "can wait" … 2 "today"); "today" has 0.5724
 ```
 
 The pointer head applies the checkpoint's fitted temperature by default (0.8B 2.41, 4B 2.14, 9B 2.30), matching `kev.serve`. It never changes the argmax. Pass `{ temperature: 1 }` to `loadKev` for the raw logits. `{ dateFacts: true }` appends day counts between absolute dates in the state (`KEV_DATE_FACTS=1`).
 
 ## Results
 
-Measured in Chrome on an Apple M4 Max (WebGPU on Metal), against the fp32 PyTorch model (`kev.evaluate.load`) at the
+Measured in Chrome on an Apple M4 Max (WebGPU on Metal), against the fp32 PyTorch model (`kev.checkpoint.load`) at the
 same commit. Each fp32 ONNX export matches PyTorch to 1e-4 or better, so the 300-record comparisons use it as the
 reference. The 300 records are held-out transfer-v4 development data (sources Kev was not trained on).
 
