@@ -25,6 +25,11 @@ from kev.checkpoint import Checkpoint, LoadOptions
 from kev.model import rows_of
 from .pin import pin
 
+# Largest image area fed to the tower, after Qwen's smart_resize (the base allows 16.7M). The tower's attention is full
+# over the image's patches, so its memory grows with the square of the area: at 589,824 pixels (768 x 768) that is 2,304
+# patches and a 340 MB fp32 score matrix per layer, which WebGPU buffers hold; 576 tokens reach the text model.
+MAX_PIXELS = 768 * 768
+
 
 def load_visual(base: str, dtype=torch.float32):
     """The stock Qwen3_5VisionModel (ViT + patch merger) from a base snapshot's `model.visual.*` tensors."""
@@ -62,7 +67,7 @@ def rope_positions(ids, grid_h, grid_w, image_token, merge=2):
 class VisionKev:
     """A Kev checkpoint (fp32, LoRA merged, raw logits) with the stock vision tower of its own base in front."""
 
-    def __init__(self, run: str, device="cpu", max_pixels: int | None = None):
+    def __init__(self, run: str, device="cpu", max_pixels: int = MAX_PIXELS):
         from huggingface_hub import snapshot_download
         from transformers import AutoImageProcessor
         self.run = pin(run)
@@ -72,7 +77,7 @@ class VisionKev:
         self.base = snapshot_download(ck.meta.base, revision=ck.meta.base_revision)
         self.config, self.visual = load_visual(self.base)
         self.visual.to(device)
-        self.proc = AutoImageProcessor.from_pretrained(self.base, **({"size": {"shortest_edge": 65536, "longest_edge": max_pixels}} if max_pixels else {}))
+        self.proc = AutoImageProcessor.from_pretrained(self.base, size={"shortest_edge": 65536, "longest_edge": max_pixels})
         self.device = device
         c = self.config
         self.image_token, self.vs, self.ve = c.image_token_id, c.vision_start_token_id, c.vision_end_token_id

@@ -24,7 +24,12 @@ main { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; } .spacer { flex: 1; }
 .chk { display: flex; align-items: center; gap: 6px; user-select: none; } .chk input { margin: 0; }
 label { font-size: 13.5px; color: var(--muted); }
-textarea { width: 100%; min-height: 460px; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: transparent; color: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
+#image-box { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; padding: 6px; border: 1px dashed var(--line); border-radius: 6px; font-size: 13px; }
+#image-box #thumb { display: none; height: 56px; max-width: 120px; object-fit: contain; border-radius: 4px; }
+#image-box.has-image #thumb { display: block; } #image-box:not(.has-image) #image-clear { display: none; }
+label.file { font-size: 14px; color: inherit; padding: 5px 9px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+label.file:hover { border-color: var(--accent); } label.file input { display: none; }
+textarea { width: 100%; min-height: 390px; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: transparent; color: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
 select, button { font: inherit; font-size: 14px; padding: 5px 9px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: inherit; }
 button { cursor: pointer; } button:not(:disabled):hover { border-color: var(--accent); } button:disabled { opacity: .5; cursor: default; }
 #progress { width: 220px; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }

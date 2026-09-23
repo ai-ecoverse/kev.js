@@ -2,9 +2,9 @@
 import * as ort from "onnxruntime-web/webgpu";
 import wasm from "onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url";
 import mjs from "onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url";
-import { loadKev, modelFiles, type KevManifest, type OrtModule } from "../../src/index.ts";
+import { loadKev, modelFiles, preprocess, toRecord, type ImageLike, type KevManifest, type OrtModule, type SystemOneRequest } from "../../src/index.ts";
 import type { Fixture } from "../fixtures.ts";
-import { bounds, Parity } from "../parity.ts";
+import { argmax, bounds, MEAN_ABS_DP, Parity } from "../parity.ts";
 import { stubOrt, syntheticBundle, withoutFetch } from "../synthetic.ts";
 
 ort.env.wasm.wasmPaths = { wasm, mjs };
@@ -161,7 +161,85 @@ const cases = {
       loadMs: Math.round(loadMs), msPerFixture: Math.round(msPerFixture),
     };
   },
+
+  /** A vision bundle served from public/models, image requests compared with PyTorch per eval set, with the latency
+   * split between the vision tower and the decoder. Images are decoded by the browser, as an application would. */
+  async vision(o: { model?: string; variant?: string; ep?: "wasm" | "webgpu"; limit?: number }) {
+    const model = o.model ?? "kev-4b-vision", variant = o.variant ?? "q8f32", ep = o.ep ?? "webgpu";
+    const res = await fetch(`/models/${model}/manifest.json`);
+    if (!res.ok) return { skip: `no vision bundle at public/models/${model} (README: Images)` };
+    const manifest = (await res.json()) as KevManifest;
+    const fres = await fetch(`/fixtures/${model}.json`);
+    if (!fres.ok) return { skip: "no vision fixtures" };
+    const fx = (await fres.json()) as { run: string; fixtures: VisionFixture[] };
+    let adapter: string | null = null;
+    if (ep === "webgpu") {
+      const a = await (navigator as Navigator & { gpu?: { requestAdapter(): Promise<{ info?: Record<string, string> } | null> } }).gpu?.requestAdapter();
+      if (!a) return { skip: "no WebGPU adapter in this browser" };
+      adapter = [a.info?.vendor, a.info?.architecture, a.info?.description].filter(Boolean).join(" ") || "unknown";
+    }
+    const t0 = performance.now();
+    const kev = await loadKev(`/models/${model}`, { ort: ort as unknown as OrtModule, variant, executionProviders: [ep], temperature: 1, cacheName: null });
+    const loadMs = performance.now() - t0;
+    say(`${model} ${variant}: loaded on ${ep}${adapter ? ` (${adapter})` : ""} in ${Math.round(loadMs)} ms`);
+    // compile the shaders for both graphs before timing
+    const warm = fx.fixtures[0];
+    await kev.probs(toRecord(warm.request).record, await decodeImage(`/${warm.image}`));
+    kev.clearCache();
+
+    const sets: Record<string, { parity: Parity; correct: number; refCorrect: number; brier: number; vision: number[]; decoder: number[]; pixel: number }> = {};
+    const sample = fx.fixtures.slice(0, o.limit ?? fx.fixtures.length);
+    for (const [i, f] of sample.entries()) {
+      const img = await decodeImage(`/${f.image}`);
+      const probs = await kev.probs(toRecord(f.request).record, img);
+      const s = sets[f.set] ??= { parity: new Parity(), correct: 0, refCorrect: 0, brier: 0, vision: [], decoder: [], pixel: 0 };
+      s.vision.push(kev.timing.preprocess + kev.timing.vision);
+      s.decoder.push(kev.timing.state + kev.timing.branches);
+      const px = preprocess(img, manifest.vision!.config);
+      let sum = 0;
+      for (const x of px.data) sum += x;
+      s.pixel = Math.max(s.pixel, Math.abs(sum - f.pixels.sum) / px.data.length);
+      probs.forEach((p, k) => {
+        const y = f.labels[k];
+        s.parity.add(`${f.set}/${f.id} q${k}`, f.probs[k], p);
+        s.correct += +(argmax(p) === y); s.refCorrect += +(argmax(f.probs[k]) === y);
+        s.brier += p.reduce((t, x, j) => t + (x - +(j === y)) ** 2, 0);
+      });
+      if (i % 10 === 0) say(`${model} ${variant} ${ep}: image ${i}, vision ${Math.round(kev.timing.vision)} ms, decoder ${Math.round(kev.timing.state + kev.timing.branches)} ms`);
+    }
+    await kev.release();
+    // as test/vision.test.ts: twice the worst set of the manifest's (ORT CPU) measurement for this variant
+    const measured = Object.values((manifest.vision!.parity?.[variant] ?? {}) as Record<string, { max_abs_dp: number }>).map((s) => s.max_abs_dp);
+    const bound = variant === "fp32" ? { max: 1e-4, mean: 1e-4 } : { max: 2 * Math.max(0.05, ...measured), mean: MEAN_ABS_DP };
+    const median = (xs: number[]) => { const s = [...xs].sort((a, b) => a - b); return Math.round(s[s.length >> 1]); };
+    const out: Record<string, unknown> = {};
+    for (const [name, s] of Object.entries(sets)) {
+      const n = s.parity.questions;
+      out[name] = {
+        images: s.vision.length, questions: n, mean_abs_dp: s.parity.mean, max_abs_dp: s.parity.worst, worst: s.parity.worstAt,
+        flips: s.parity.flips, accuracy: s.correct / n, reference_accuracy: s.refCorrect / n, brier_t1: s.brier / n,
+        median_ms: { vision: median(s.vision), decoder: median(s.decoder) }, max_mean_pixel_diff: s.pixel,
+        violations: s.parity.violations(bound),
+      };
+    }
+    return { ep, adapter, variant, run: manifest.run, fixtureRun: fx.run, loadMs: Math.round(loadMs), sets: out };
+  },
 };
+
+interface VisionFixture {
+  set: string; id: string; image: string; request: SystemOneRequest; labels: number[]; probs: number[][]; pixels: { sum: number };
+}
+
+/** An image file as RGBA pixels, without colour-space conversion or premultiplication (PIL's view of the file). */
+async function decodeImage(url: string): Promise<ImageLike> {
+  const bitmap = await createImageBitmap(await (await fetch(url)).blob(), { colorSpaceConversion: "none", premultiplyAlpha: "none" });
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const ctx = canvas.getContext("2d")!;
+  ctx.drawImage(bitmap, 0, 0);
+  const { data, width, height } = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+  bitmap.close();
+  return { data, width, height };
+}
 
 export type CaseName = keyof typeof cases;
 export type CaseResult = Record<string, unknown>;

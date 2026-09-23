@@ -1,3 +1,36 @@
+import coffee from "../eval/vision-v1/images/coffee.png?url";
+import shop from "../eval/vision-v2/images/shop-0.png?url";
+import dashboard from "../eval/vision-v2/images/dashboard-0.png?url";
+
+/** Requests that come with an image (from eval/vision-v1 and v2): the image is loaded into the picker, the rest into
+ * the request box. They need a model with a vision tower. */
+export const imagePresets: Record<string, { image: string; request: unknown }> = {
+  "Image: photo (coffee)": { image: coffee, request: {
+    state: "A photo.",
+    questions: {
+      drink: { type: "choice", instructions: "What drink is shown?", criteria: { coffee: null, "orange juice": null, water: null, wine: null } },
+      spoon: { type: "noul", instructions: "Is there a spoon?" },
+      empty: { type: "noul", instructions: "Is the cup empty?" },
+    },
+  } },
+  "Image: shop screenshot": { image: shop, request: {
+    state: "A screenshot of an online shop.",
+    questions: {
+      cheap: { type: "choice", instructions: "Which of these products is the cheapest?", criteria: { "Desk lamp": null, Keyboard: null, "Yoga mat": null, "Notebook set": null } },
+      stock: { type: "noul", instructions: "Is the coffee grinder in stock?" },
+      over50: { type: "score", instructions: "How many products cost more than $50?", criteria: ["0", "1", "2", "3", "4", "5", "6", "7", "8"] },
+    },
+  } },
+  "Image: dashboard": { image: dashboard, request: {
+    state: "A screenshot of an analytics dashboard.",
+    questions: {
+      revenue: { type: "noul", instructions: "Did revenue go up?" },
+      churn: { type: "score", instructions: "How high is monthly churn?", criteria: ["under 2%", "2% to 4%", "4% to 6%", "over 6%"] },
+      down: { type: "choice", instructions: "Which metric went down?", criteria: { revenue: null, "active users": null } },
+    },
+  } },
+};
+
 export const presets: Record<string, unknown> = {
   "Support ticket": {
     state: "Shoes arrived two weeks late and in the wrong size. Also I see two charges on my card.",

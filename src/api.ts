@@ -7,6 +7,8 @@
 // Kev renders JSON content with Python's str(), so the text the model sees depends on Python formatting rules
 // (True/False, float repr). Those are reproduced here so browser and server feed the model identical text.
 
+import type { ImageLike } from "./vision.ts";
+
 export type JSONContent = string | number | boolean | null | JSONContent[] | { [key: string]: JSONContent };
 
 export interface NoulQuestion { type: "noul"; instructions?: JSONContent; criteria?: { true?: JSONContent; false?: JSONContent } | null }
@@ -14,7 +16,9 @@ export interface ChoiceQuestion { type: "choice"; instructions?: JSONContent; cr
 export interface ScoreQuestion { type: "score"; instructions?: JSONContent; criteria: JSONContent[] }
 export type Question = NoulQuestion | ChoiceQuestion | ScoreQuestion;
 
-export interface SystemOneRequest { state: JSONContent; model?: string; questions: Record<string, Question> }
+/** `image` (RGBA pixels, e.g. canvas getImageData) is a kev.js addition for vision bundles: it goes in front of the
+ * state. kev.serve has no such field; a request without it is the TypeSafe request unchanged. */
+export interface SystemOneRequest { state: JSONContent; model?: string; questions: Record<string, Question>; image?: ImageLike }
 
 export interface NoulAnswer { type: "noul"; noul: number }
 export interface ChoiceAnswer { type: "choice"; choice: string; confidence: number; probabilities: Record<string, number> }
@@ -64,6 +68,11 @@ export function validate(req: unknown): SystemOneRequest {
     } else {
       throw new ValidationError(`questions.${id}.type must be noul, choice or score`);
     }
+  }
+  if (req.image != null) {
+    const im = req.image as Partial<ImageLike>;
+    if (!isObject(im) || !Number.isInteger(im.width) || !Number.isInteger(im.height) || im.width! < 1 || im.height! < 1 || !ArrayBuffer.isView(im.data) || im.data.length !== im.width! * im.height! * 4)
+      throw new ValidationError("image must be { width, height, data } with width x height x 4 RGBA bytes");
   }
   return req as unknown as SystemOneRequest;
 }

@@ -4,7 +4,11 @@
         --variant q8=web-q8 --variant fp16=web-fp16 --fixtures ../fixtures/kev-0.8b.json
 
 Large files are hard-linked, not copied. With --fixtures, each variant's parity against the PyTorch reference is
-measured (CPU EP) and recorded in the manifest."""
+measured (CPU EP) and recorded in the manifest.
+
+--vision <kev_web_export.vision_onnx out dir> makes a bundle that takes images: the tower's browser graph goes under
+r-<sha>/vision/ and manifest.json gains `vision` (files, sizes, vision.json as `config`, and --vision-parity's report
+if given). Its variants must be spliced decoders (kev_web_export.splice), which take `image_embeds`."""
 import argparse, json, os, shutil
 import onnx
 from .ort_runtime import OrtKev
@@ -37,6 +41,8 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--variant", action="append", required=True, help="name=dir, e.g. q8=web-q8")
     ap.add_argument("--fixtures")
+    ap.add_argument("--vision", help="vision_onnx output dir (web/ and vision.json)")
+    ap.add_argument("--vision-parity", action="append", default=[], help="name=report.json from vision_parity, recorded per name")
     a = ap.parse_args()
     kev = json.load(open(f"{a.build}/kev.json"))
     # Everything but the manifest lives under a revision directory, so publishing a new checkpoint never overwrites a
@@ -79,9 +85,30 @@ def main():
             v["parity"] = {"max_abs_dp": round(worst, 6), "argmax_flips": flips, "questions": n}
             print(name, v["parity"])
         variants[name] = v
+    vision = None
+    if a.vision:
+        cfg = json.load(open(f"{a.vision}/vision.json"))
+        if cfg["run"] != kev["run"]: raise SystemExit(f"{a.vision} was exported for {cfg['run']}, the decoder from {kev['run']}")
+        if not all(any(i["name"] == "image_embeds" for i in v["inputs"]) for v in variants.values()):
+            raise SystemExit("--vision needs spliced decoders (kev_web_export.splice): a variant has no image_embeds input")
+        vd = f"{r}/vision"
+        os.makedirs(f"{a.out}/{vd}", exist_ok=True)
+        files = ["model.onnx", *sorted((f for f in os.listdir(f"{a.vision}/web") if f.startswith("model.onnx.data")), key=lambda f: (len(f), f))]
+        for f in files: link(f"{a.vision}/web/{f}", f"{a.out}/{vd}/{f}")
+        sizes = {f"{vd}/{f}": os.path.getsize(f"{a.out}/{vd}/{f}") for f in files}
+        config = {k: v for k, v in cfg.items() if k not in ("run", "base", "inputs", "outputs")}
+        vision = {"model": f"{vd}/model.onnx", "data": [f"{vd}/{f}" for f in files[1:]], "bytes": sum(sizes.values()), "sizes": sizes, "config": config}
+        if a.vision_parity:
+            vision["parity"] = {}
+            for spec in a.vision_parity:
+                name, path = spec.split("=", 1)
+                rep = json.load(open(path))
+                vision["parity"][name] = {s: {k: (round(x, 6) if isinstance(x, float) else len(x) if k == "flips" else x) for k, x in c.items()}
+                                          for s, c in rep["sets"].items()}
     # drop files from earlier packagings (removed variants, old shard layouts): the directory is published as is
     keep = {"manifest.json", f"{r}/tokenizer.json", f"{r}/tokenizer_config.json", f"{r}/head.safetensors"}
     for v in variants.values(): keep |= {v["model"], *v["data"]}
+    if vision: keep |= {vision["model"], *vision["data"]}
     for root, _, fs in os.walk(a.out, topdown=False):
         for f in fs:
             rel = os.path.relpath(os.path.join(root, f), a.out)
@@ -90,7 +117,7 @@ def main():
     keys = ("run", "base", "hidden_size", "head_dim", "special", "max_state", "max_branch", "temperature")
     manifest = {"name": os.path.basename(os.path.normpath(a.out)), **{k: kev[k] for k in keys if k in kev},
                 "files": {"head": f"{r}/head.safetensors", "tokenizer": f"{r}/tokenizer.json", "tokenizer_config": f"{r}/tokenizer_config.json"},
-                "variants": variants}
+                "variants": variants, **({"vision": vision} if vision else {})}
     json.dump(manifest, open(f"{a.out}/manifest.json", "w"), indent=2)
     print(f"{a.out}/manifest.json: {', '.join(f'{k} {v['bytes'] / 1e6:.0f} MB' for k, v in variants.items())}")
 

@@ -50,6 +50,13 @@
           <button id="run" disabled title="⌘↵">Run</button>
           <button id="separate" disabled title="each question in its own pass">Packed vs separate</button>
         </div>
+        <div id="image-box" title="drop an image here">
+          <img id="thumb" alt="" />
+          <span id="image-name" class="muted"></span>
+          <span class="spacer"></span>
+          <label class="file">Image… <input type="file" id="image-file" accept="image/*" /></label>
+          <button id="image-clear">Remove</button>
+        </div>
         <textarea id="request" spellcheck="false"></textarea>
       </section>
       <section class="panel">
@@ -126,6 +133,12 @@ res.answers.frustration.score;         // 1.46   expected level, 0-based</code><
       state (Kev's <code>KEV_DATE_FACTS=1</code>). The pointer head applies the checkpoint's fitted temperature
       (about 2.1–2.4) unless you set <code>temperature: 1</code> for the raw logits. The shapes match Kev's
       <code>POST /v1/systemone</code>, so the TypeSafe SDK's examples carry over.
+    </p>
+    <p>
+      A vision bundle (<code>kev-4b-vision</code>, built locally for now) adds Qwen3.5's own vision tower, untrained,
+      in front of the same decoder. Such a request may carry <code>image</code>: RGBA pixels such as a canvas's
+      <code>getImageData()</code>. The image goes in front of the state, and a request without one is answered exactly
+      as before. Pick an image preset, or drop an image on the box above the request.
     </p>
   </section>
 

@@ -7,6 +7,7 @@ import { Tokenizer } from "@huggingface/tokenizers";
 import { pyJsonDumps, toAnswers, toRecord, validate, withDateFacts, type Answer, type DecisionRecord, type SystemOneRequest, type SystemOneResponse } from "./api.ts";
 import { encode, type Encoding, type EncodeOptions, type SpecialTokens } from "./encode.ts";
 import { PointerHead } from "./head.ts";
+import { imageKey, preprocess, ropePositions, visionInputs, type ImageLike, type VisionConfig } from "./vision.ts";
 
 /** The subset of the onnxruntime-web / onnxruntime-node module the runtime uses (both satisfy it). */
 export interface OrtModule {
@@ -35,6 +36,21 @@ export interface VariantManifest {
   parity?: { max_abs_dp: number; argmax_flips: number; questions: number };
 }
 
+/** The vision tower of a bundle that takes images (kev_web_export.vision_onnx + package --vision). Its decoder
+ * variants have an `image_embeds` input (kev_web_export.splice). */
+export interface VisionManifest {
+  model: string;
+  data: string[];
+  bytes: number;
+  sizes?: Record<string, number>;
+  config: VisionConfig;
+  /** image fixtures through this tower and each variant, against fp32 PyTorch */
+  parity?: Record<string, unknown>;
+}
+
+/** Where the time of the last request went, in ms. Image requests fill preprocess and vision. */
+export interface Timing { preprocess: number; vision: number; state: number; branches: number; cached: boolean; imageTokens: number }
+
 export interface KevManifest {
   name: string;
   run: string;
@@ -48,6 +64,7 @@ export interface KevManifest {
   temperature?: number;
   files: { head: string; tokenizer: string; tokenizer_config: string };
   variants: Record<string, VariantManifest>;
+  vision?: VisionManifest;
 }
 
 export interface KevOptions extends EncodeOptions {
@@ -87,7 +104,8 @@ export function temperatureFor(run: string, manifestTemperature?: number): numbe
 
 type Past = Map<string, Tensor>;
 
-interface CachedState { len: number; past: Past }
+/** A state run once: its token count, caches, and the first text position of every question branch after it. */
+interface CachedState { len: number; past: Past; next: number }
 
 const halfToFloat = (() => {
   const f = new Float32Array(1), u = new Uint32Array(f.buffer);
@@ -118,14 +136,23 @@ export class Kev {
   private cache = new Map<string, CachedState>();
   private queue: Promise<unknown> = Promise.resolve();
   private v: VariantManifest;
+  private vision?: InferenceSession;
+  private imageInput: boolean;
+  /** Where the time of the last request went. */
+  timing: Timing = { preprocess: 0, vision: 0, state: 0, branches: 0, cached: false, imageTokens: 0 };
 
-  constructor(a: { ort: OrtModule; session: InferenceSession; head: PointerHead; tokenizer: Tokenizer; manifest: KevManifest; variant: string; options?: KevOptions }) {
-    this.ort = a.ort; this.session = a.session; this.head = a.head; this.tokenizer = a.tokenizer;
+  constructor(a: { ort: OrtModule; session: InferenceSession; head: PointerHead; tokenizer: Tokenizer; manifest: KevManifest; variant: string; options?: KevOptions; vision?: InferenceSession }) {
+    this.ort = a.ort; this.session = a.session; this.head = a.head; this.tokenizer = a.tokenizer; this.vision = a.vision;
     this.manifest = a.manifest; this.variant = a.variant; this.v = a.manifest.variants[a.variant];
     if (!this.v) throw new Error(`unknown variant ${a.variant}; have ${Object.keys(a.manifest.variants)}`);
     this.opts = { stateCacheSize: 4, dateFacts: false, maxState: 8192, maxBranch: 8192, ...a.options };
     this.head.temperature = a.options?.temperature ?? temperatureFor(a.manifest.run, a.manifest.temperature);
+    this.imageInput = this.v.inputs.some((i) => i.name === "image_embeds");
+    if (this.vision && !(this.imageInput && a.manifest.vision)) throw new Error(`variant ${a.variant} of ${a.manifest.name} takes no image_embeds`);
   }
+
+  /** Whether requests may carry an image (the bundle has a vision tower and it was loaded). */
+  get acceptsImages() { return this.vision !== undefined; }
 
   /** Serving temperature actually in use (checkpoint or override). */
   get temperature() { return this.head.temperature; }
@@ -164,47 +191,102 @@ export class Kev {
     return past;
   }
 
-  private feeds(ids: number[], pos: number[], past: Past, pastLen: number): Record<string, Tensor> {
+  /** pos: text positions (all three mRoPE sections equal) or [3][S] mRoPE positions. A graph with an image_embeds
+   * input gets the image's rows, or one row of zeros for text (its output is then the text graph's). */
+  private feeds(ids: number[], pos: number[] | number[][], past: Past, pastLen: number, imageEmbeds?: Tensor): Record<string, Tensor> {
     const S = ids.length;
-    return {
+    const p3 = typeof pos[0] === "number" ? [pos, pos, pos] as number[][] : pos as number[][];
+    const feeds: Record<string, Tensor> = {
       input_ids: this.tensor("int64", ids, [1, S]),
       attention_mask: this.tensor("int64", new Array(pastLen + S).fill(1), [1, pastLen + S]),
-      position_ids: this.tensor("int64", [...pos, ...pos, ...pos], [3, 1, S]),   // text positions: all three mRoPE sections equal
+      position_ids: this.tensor("int64", p3.flat(), [3, 1, S]),
       ...Object.fromEntries(past),
     };
+    if (this.imageInput) {
+      const d = this.manifest.hidden_size;
+      feeds.image_embeds = imageEmbeds ?? new this.ort.Tensor(this.v.io_dtype, this.v.io_dtype === "float16" ? new Uint16Array(d) : new Float32Array(d), [1, d]);
+    }
+    return feeds;
   }
 
-  private async runState(ids: number[], pos: number[]): Promise<CachedState> {
+  private async runState(ids: number[], pos: number[] | number[][], imageEmbeds?: Tensor): Promise<CachedState> {
     const empty = this.emptyPast();
     const presentNames = this.v.outputs.map((o) => o.name).filter((n) => n.startsWith("present"));
-    const out = await this.session.run(this.feeds(ids, pos, empty, 0), presentNames);
+    const out = await this.session.run(this.feeds(ids, pos, empty, 0, imageEmbeds), presentNames);
     const past: Past = new Map();
     for (const n of presentNames)
       past.set(n.endsWith(".key") || n.endsWith(".value") ? n.replace("present.", "past_key_values.") : n.replace("present.", "past."), out[n]);
-    return { len: ids.length, past };
+    const last = typeof pos[0] === "number" ? (pos as number[]) : (pos as number[][]).flat();
+    return { len: ids.length, past, next: last.reduce((a, b) => Math.max(a, b), -1) + 1 };
+  }
+
+  /** The vision tower on one image: [image tokens, hidden] rows for the <|image_pad|> tokens, and the patch grid. */
+  private async imageEmbeds(image: ImageLike): Promise<{ embeds: Tensor; gridH: number; gridW: number }> {
+    const c = this.manifest.vision!.config;
+    if (this.v.io_dtype !== "float32") throw new Error("image input needs a float32-io variant (q8f32)");
+    const t0 = performance.now();
+    const { data, gridH, gridW } = preprocess(image, c);
+    const { posIdx, posW, cos, sin } = visionInputs(gridH, gridW, c);
+    const P = gridH * gridW, hd = c.hidden_size / c.num_heads;
+    const t1 = performance.now();
+    const out = await this.vision!.run({
+      patches: new this.ort.Tensor("float32", data, [P, data.length / P]),
+      pos_idx: new this.ort.Tensor("int64", posIdx, [P, 4]),
+      pos_w: new this.ort.Tensor("float32", posW, [P, 4]),
+      cos: new this.ort.Tensor("float32", cos, [P, hd]),
+      sin: new this.ort.Tensor("float32", sin, [P, hd]),
+    });
+    this.timing.preprocess = t1 - t0; this.timing.vision = performance.now() - t1;
+    return { embeds: out.image_embeds, gridH, gridW };
   }
 
   private disposeState(s: CachedState) {
     for (const t of s.past.values()) (t as Tensor & { dispose?: () => void }).dispose?.();
   }
 
-  /** Per-question probabilities for an encoded request. onQuestion fires as each question finishes. */
-  probsEncoded(enc: Encoding, onQuestion?: (index: number, probs: number[]) => void): Promise<number[][]> {
+  /** Run a state: text only, or with an image first (<state> <|vision_start|> <|image_pad|> x N <|vision_end|> text,
+   * where Qwen's chat template also puts the image before the text), with Qwen3.5's mRoPE positions. */
+  private async newState(enc: Encoding, image?: ImageLike): Promise<CachedState> {
+    this.timing.preprocess = this.timing.vision = 0; this.timing.imageTokens = 0;
+    if (!image) return this.runState(enc.state, enc.state.map((_, i) => i));
+    const c = this.manifest.vision!.config;
+    const { embeds, gridH, gridW } = await this.imageEmbeds(image);
+    const n = embeds.dims[0];
+    const ids = [enc.state[0], c.vision_start, ...new Array(n).fill(c.image_token), c.vision_end, ...enc.state.slice(1)];
+    this.timing.imageTokens = n;
+    try {
+      return await this.runState(ids, ropePositions(ids, gridH, gridW, c.image_token, c.merge_size), embeds);
+    } finally {
+      (embeds as Tensor & { dispose?: () => void }).dispose?.();
+    }
+  }
+
+  /** Per-question probabilities for an encoded request, with an optional image in front of the state. onQuestion
+   * fires as each question finishes. */
+  probsEncoded(enc: Encoding, onQuestion?: (index: number, probs: number[]) => void, image?: ImageLike): Promise<number[][]> {
+    if (image && !this.vision) throw new Error(this.manifest.vision ? "loaded without the vision tower (vision: false)" : `${this.manifest.name} takes no images; load a vision bundle`);
     return this.serial(async () => {
-      const key = enc.state.join(",");
+      const key = (image ? `${imageKey(image)}|` : "") + enc.state.join(",");
+      const t0 = performance.now();
       let st = this.cache.get(key);
-      if (st) this.cache.delete(key);
-      else st = await this.runState(enc.state, enc.state.map((_, i) => i));
+      this.timing.cached = !!st;
+      if (st) { this.cache.delete(key); this.timing.preprocess = this.timing.vision = 0; }
+      else st = await this.newState(enc, image);
+      const t1 = performance.now();
+      this.timing.state = t1 - t0 - this.timing.preprocess - this.timing.vision;
       const d = this.manifest.hidden_size;
       const probs: number[][] = [];
       try {
         for (const [i, b] of enc.branches.entries()) {
-          const out = await this.session.run(this.feeds(b.ids, b.pos, st.past, st.len), ["hidden_states"]);
+          // branch positions continue the state's: len for text, max(mRoPE positions) + 1 after an image
+          const pos = st.next === enc.state.length ? b.pos : b.pos.map((p) => p - enc.state.length + st!.next);
+          const out = await this.session.run(this.feeds(b.ids, pos, st.past, st.len), ["hidden_states"]);
           const h = toFloat32(out.hidden_states as TypedTensor<"float32">);
           const row = (i: number) => h.subarray(i * d, (i + 1) * d);
           const p = this.head.probs(row(b.decide), b.opts.map(row));
           probs.push(p); onQuestion?.(i, p);
         }
+        this.timing.branches = performance.now() - t1;
       } finally {
         if (this.opts.stateCacheSize > 0) {
           this.cache.set(key, st);
@@ -218,11 +300,12 @@ export class Kev {
     });
   }
 
-  async probs(rec: DecisionRecord): Promise<number[][]> {
-    return this.probsEncoded(this.encode(rec));
+  async probs(rec: DecisionRecord, image?: ImageLike): Promise<number[][]> {
+    return this.probsEncoded(this.encode(rec), undefined, image);
   }
 
-  /** POST /v1/systemone. onAnswer fires per question, so a caller can show answers as they land. */
+  /** POST /v1/systemone. onAnswer fires per question, so a caller can show answers as they land. `image` (RGBA
+   * pixels) goes in front of the state on a vision bundle; without it the request is exactly the text request. */
   async systemOne(input: SystemOneRequest | unknown, opts: { onAnswer?: (id: string, answer: Answer, index: number) => void; dateFacts?: boolean } = {}): Promise<SystemOneResponse> {
     let req = validate(input);
     if (opts.dateFacts ?? this.opts.dateFacts) req = { ...req, state: withDateFacts(req.state) };
@@ -232,11 +315,12 @@ export class Kev {
     const probs = await this.probsEncoded(enc, opts.onAnswer && ((i, p) => {
       const m = meta[i];
       opts.onAnswer!(m.id, toAnswers([p], [m])[m.id], i);
-    }));
+    }), req.image);
     const latency = performance.now() - t0;
     const answers = toAnswers(probs, meta);
     const outputTokens = this.tokenizer.encode(pyJsonDumps(answers), { add_special_tokens: false }).ids.length;
-    return { model: req.model ?? "kev-latest", answers, usage: { input_tokens: enc.tokens, output_tokens: outputTokens }, latency_ms: Math.round(latency * 10) / 10 };
+    const inputTokens = enc.tokens + (req.image ? this.timing.imageTokens + 2 : 0);
+    return { model: req.model ?? "kev-latest", answers, usage: { input_tokens: inputTokens, output_tokens: outputTokens }, latency_ms: Math.round(latency * 10) / 10 };
   }
 
   /** POST /v1/systemone/separate: each question in its own request against the same state. */
@@ -255,5 +339,5 @@ export class Kev {
 
   clearCache() { for (const s of this.cache.values()) this.disposeState(s); this.cache.clear(); }
 
-  async release() { this.clearCache(); await this.session.release(); }
+  async release() { this.clearCache(); await this.session.release(); await this.vision?.release(); }
 }

@@ -2,7 +2,7 @@
 import * as ort from "onnxruntime-web/webgpu";
 import wasm from "onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url";
 import mjs from "onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url";
-import { loadKev, type DecisionRecord, type Kev, type OrtModule } from "../src/index.ts";
+import { loadKev, type DecisionRecord, type Kev, type OrtModule, type Timing } from "../src/index.ts";
 
 ort.env.wasm.wasmPaths = { wasm, mjs };
 ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(8, navigator.hardwareConcurrency || 4) : 1;
@@ -14,9 +14,9 @@ export type WorkerRequest =
 export type WorkerResponse =
   | { type: "progress"; file: string; loaded: number; total: number }
   | { type: "phase"; phase: "manifest" | "download" | "session" | "warmup" }
-  | { type: "ready"; variant: string; device: string; loadMs: number; warmupMs: number; temperature: number }
+  | { type: "ready"; variant: string; device: string; loadMs: number; warmupMs: number; temperature: number; images: boolean }
   | { type: "partial"; id: number; qid: string; answer: unknown; index: number }
-  | { type: "result"; id: number; response: unknown }
+  | { type: "result"; id: number; response: unknown; timing: Timing }
   | { type: "error"; id?: number; message: string };
 
 let kev: Kev | null = null;
@@ -38,14 +38,16 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
       const t1 = performance.now();
       post({ type: "phase", phase: "warmup" });
       await kev.systemOne({ state: "warm up", questions: { q: { type: "noul", instructions: "Is this a warm-up?" } } });   // compiles the shaders
+      if (kev.acceptsImages) await kev.systemOne({ state: "warm up", image: { width: 64, height: 64, data: new Uint8ClampedArray(64 * 64 * 4).fill(128) },
+        questions: { q: { type: "noul", instructions: "Is this a warm-up?" } } });
       kev.clearCache();
-      post({ type: "ready", variant: m.variant, device: m.device, loadMs: t1 - t0, warmupMs: performance.now() - t1, temperature: kev.temperature });
+      post({ type: "ready", variant: m.variant, device: m.device, loadMs: t1 - t0, warmupMs: performance.now() - t1, temperature: kev.temperature, images: kev.acceptsImages });
     } else if (m.type === "run") {
       if (!kev) throw new Error("model not loaded");
       const response = m.mode === "separate" ? await kev.systemOneSeparate(m.request, { dateFacts: m.dateFacts })
         : m.mode === "probs" ? await kev.probs(m.request as DecisionRecord)   // raw probabilities for a rendered record (parity checks)
         : await kev.systemOne(m.request, { dateFacts: m.dateFacts, onAnswer: (qid, answer, index) => post({ type: "partial", id: m.id, qid, answer, index }) });
-      post({ type: "result", id: m.id, response });
+      post({ type: "result", id: m.id, response, timing: { ...kev.timing } });
     }
   } catch (err) {
     post({ type: "error", id: m.type === "run" ? m.id : undefined, message: err instanceof Error ? err.message : String(err) });

@@ -31,6 +31,9 @@ export interface LoadOptions extends KevOptions {
   /** Cache Storage bucket for model files; null disables caching. Default "kev-web-v1". Only URL sources are cached. */
   cacheName?: string | null;
   sessionOptions?: InferenceSession.SessionOptions;
+  /** Load the vision tower of a bundle that has one (manifest.vision), so requests may carry an image. Default true;
+   * false loads only the decoder, which then answers text requests exactly as the text bundle does. */
+  vision?: boolean;
   /** weight files fetched at once. Default 2: on a bandwidth-limited link more streams are slower in aggregate
    * (measured through a tunnel: 1.2 MB/s with one stream, 0.75 MB/s across six). */
   concurrency?: number;
@@ -94,12 +97,15 @@ export function directoryReader(dir: FileSystemDirectoryHandle): ReadModelFile {
 }
 
 /** Every file a variant loads besides manifest.json, with its size when the manifest records one. A download or resume
- * step can fetch exactly these, and skip those already at their size. */
-export function modelFiles(manifest: KevManifest, variant = Object.keys(manifest.variants)[0]): { path: string; bytes?: number }[] {
+ * step can fetch exactly these, and skip those already at their size. A vision bundle adds its tower's files unless
+ * `vision` is false. */
+export function modelFiles(manifest: KevManifest, variant = Object.keys(manifest.variants)[0], vision = true): { path: string; bytes?: number }[] {
   const v = manifest.variants[variant];
   if (!v) throw new Error(`unknown variant ${variant}; have ${Object.keys(manifest.variants).join(", ")}`);
-  return [manifest.files.tokenizer, manifest.files.tokenizer_config, manifest.files.head, v.model, ...v.data]
+  const files = [manifest.files.tokenizer, manifest.files.tokenizer_config, manifest.files.head, v.model, ...v.data]
     .map((path) => ({ path, bytes: v.sizes?.[path] }));
+  const t = vision ? manifest.vision : undefined;
+  return t ? [...files, ...[t.model, ...t.data].map((path) => ({ path, bytes: t.sizes?.[path] }))] : files;
 }
 
 /** One file from a local source, as bytes. Views and buffers may come from another realm (a VFS over postMessage), so
@@ -150,13 +156,17 @@ export async function loadKev(source: ModelSource, o: LoadOptions): Promise<Kev>
   const variant = o.variant ?? Object.keys(manifest.variants)[0];
   const v = manifest.variants[variant];
   if (!v) throw new Error(`unknown variant ${variant}; have ${Object.keys(manifest.variants).join(", ")}`);
+  const tower = o.vision === false ? undefined : manifest.vision;
+  const sizes = { ...v.sizes, ...tower?.sizes };
   o.onPhase?.("download");
   // announce every file up front so the total does not grow as downloads start
-  for (const [p, bytes] of Object.entries(v.sizes ?? {})) o.onProgress?.({ file: p, loaded: 0, total: bytes });
-  const get = (p: string) => read ? readLocal(read, p, { onProgress: o.onProgress, bytes: v.sizes?.[p] })
-    : fetchFile(join(baseUrl!, p), { cacheName: o.cacheName, onProgress: o.onProgress, file: p, bytes: v.sizes?.[p], rev: manifest.run });
+  for (const [p, bytes] of Object.entries(sizes)) o.onProgress?.({ file: p, loaded: 0, total: bytes });
+  const get = (p: string) => read ? readLocal(read, p, { onProgress: o.onProgress, bytes: sizes[p] })
+    : fetchFile(join(baseUrl!, p), { cacheName: o.cacheName, onProgress: o.onProgress, file: p, bytes: sizes[p], rev: manifest.run });
   const [tokJson, tokCfg] = (await Promise.all([get(manifest.files.tokenizer), get(manifest.files.tokenizer_config)])).map(decode);
-  const [head, graph, ...data] = await pool([manifest.files.head, v.model, ...v.data].map((p) => () => get(p)), o.concurrency ?? 2);
+  const towerFiles = tower ? [tower.model, ...tower.data] : [];
+  const [head, graph, ...rest] = await pool([manifest.files.head, v.model, ...v.data, ...towerFiles].map((p) => () => get(p)), o.concurrency ?? 2);
+  const data = rest.slice(0, v.data.length), towerData = rest.slice(v.data.length);
   const tokenizer = new Tokenizer(JSON.parse(tokJson), JSON.parse(tokCfg));
   o.onPhase?.("session");
   const eps = o.executionProviders ?? ["webgpu", "wasm"];
@@ -167,7 +177,14 @@ export async function loadKev(source: ModelSource, o: LoadOptions): Promise<Kev>
     externalData: v.data.map((p, i) => ({ path: p.split("/").pop()!, data: data[i] })),
     ...o.sessionOptions,
   });
+  // the tower's weights are fp16, cast to fp32 when the session loads; its output stays on the CPU for the decoder
+  const vision = tower && await o.ort.InferenceSession.create(towerData[0], {
+    graphOptimizationLevel: "all",
+    executionProviders: eps,
+    externalData: tower.data.map((p, i) => ({ path: p.split("/").pop()!, data: towerData[i + 1] })),
+    ...o.sessionOptions,
+  });
   if (baseUrl !== null) await dropOtherRevisions(baseUrl, manifest.run, o.cacheName);
   o.onPhase?.("ready");
-  return new Kev({ ort: o.ort, session, head: PointerHead.fromSafetensors(head.slice().buffer), tokenizer, manifest, variant, options: o });
+  return new Kev({ ort: o.ort, session, head: PointerHead.fromSafetensors(head.slice().buffer), tokenizer, manifest, variant, options: o, vision });
 }

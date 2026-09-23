@@ -498,6 +498,7 @@ dependencies = [
 
 [package.dev-dependencies]
 vision = [
+    { name = "onnxscript" },
     { name = "pillow" },
     { name = "torchvision" },
 ]
@@ -522,6 +523,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 vision = [
+    { name = "onnxscript", specifier = ">=0.7.2" },
     { name = "pillow", specifier = ">=12.3.0" },
     { name = "torchvision", specifier = ">=0.21,<0.24" },
 ]
@@ -941,6 +943,23 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/d0/c3/0e679dcb7d030bc182cad706a183031ce71d6d2ecf3463050aae7f547072/onnxruntime_genai-0.16.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:67113fa9434fa44d6b97c92b2dcd7623941ed924a948a84945bd084267dcf3c0", size = 12359339 },
     { url = "https://files.pythonhosted.org/packages/f7/8c/b877b104f70d9e2ad21435f1fdf46a95ec9377c94c6fd80a2a5426c0b227/onnxruntime_genai-0.16.0-cp313-cp313-win_amd64.whl", hash = "sha256:cf78c965d31c19e9351cb6f0985c77e8f097b7fb527385a096bb5ab386cc3598", size = 4128678 },
     { url = "https://files.pythonhosted.org/packages/9b/96/15b9b9f6645211f0781a030add5b628d0dc81bc7518ab2d5821575de92b0/onnxruntime_genai-0.16.0-cp313-cp313-win_arm64.whl", hash = "sha256:680d9cf44e73531fd75b0d2cc92144388284183d39ce2ae2d31d136d0827cec4", size = 3966954 },
+]
+
+[[package]]
+name = "onnxscript"
+version = "0.7.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "ml-dtypes" },
+    { name = "numpy" },
+    { name = "onnx" },
+    { name = "onnx-ir" },
+    { name = "packaging" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0a/01/3e3fab8d643ca097ea4aa9e51246643699dfaaa0650589744fe44bc46651/onnxscript-0.7.2.tar.gz", hash = "sha256:2c664f6383d10f332a4d47b2876dcab16dba84909fe703656b19abc281fda165", size = 646719 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b9/3b/06260997cdc41138e58718588a6c87d0eb342bbe0dda8a6aae91d163c384/onnxscript-0.7.2-py3-none-any.whl", hash = "sha256:d0e7121c6a1eefd608058928e111cbdb76709f70d269ff0d07aee493bd1d13c9", size = 754215 },
 ]
 
 [[package]]

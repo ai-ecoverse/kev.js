@@ -25,10 +25,15 @@ class OrtKev:
                 past[name] = np.zeros([1] + i.shape[1:], self.dtype)
         return past
 
-    def run(self, ids, pos, past, past_len):
+    def run(self, ids, pos, past, past_len, image_embeds=None):
+        """pos: text positions [S] (all three mRoPE sections equal) or mRoPE positions [3, S]. image_embeds: rows for the
+        <|image_pad|> tokens of ids, on a graph spliced by kev_web_export.splice (one zero row when there are none)."""
+        pos = np.asarray(pos, np.int64)
         feeds = {"input_ids": np.array([ids], np.int64),
                  "attention_mask": np.ones((1, past_len + len(ids)), np.int64),
-                 "position_ids": np.broadcast_to(np.array(pos, np.int64), (3, 1, len(pos))).copy(), **past}
+                 "position_ids": (pos.reshape(3, 1, -1) if pos.ndim == 2 else np.broadcast_to(pos, (3, 1, len(pos)))).copy(), **past}
+        if "image_embeds" in self.inputs:
+            feeds["image_embeds"] = np.zeros((1, self.inputs["image_embeds"].shape[1]), self.dtype) if image_embeds is None else image_embeds.astype(self.dtype)
         names = [o.name for o in self.sess.get_outputs()]
         out = dict(zip(names, self.sess.run(names, feeds)))
         present = {n.replace("present.", "past_key_values.", 1) if n.endswith((".key", ".value")) else n.replace("present.", "past.", 1): v

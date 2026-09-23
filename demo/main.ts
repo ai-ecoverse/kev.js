@@ -1,9 +1,10 @@
-import { presets } from "./presets.ts";
+import { imagePresets, presets } from "./presets.ts";
 import type { WorkerRequest, WorkerResponse } from "./worker.ts";
-import type { Answer, KevManifest, SystemOneResponse } from "../src/index.ts";
+import type { Answer, KevManifest, SystemOneResponse, Timing } from "../src/index.ts";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-const models = ["kev-0.8b", "kev-4b", "kev-9b"];
+// kev-4b-vision is Kev-4B with Qwen3.5's own vision tower (README, Images); built locally, not published yet
+const models = ["kev-0.8b", "kev-4b", "kev-9b", "kev-4b-vision"];
 
 // Weights live on Hugging Face for the published page; a dev server with public/models/ serves them locally.
 // Override with VITE_MODEL_BASE, or ?models=<url> for a one-off.
@@ -16,12 +17,12 @@ const verbose = params.has("verbose");   // ?verbose: ORT logs, incl. node place
 const store = { get: (k: string) => localStorage.getItem(`kev-web:${k}`), set: (k: string, v: string) => localStorage.setItem(`kev-web:${k}`, v) };
 
 let nextId = 1;
-const pending = new Map<number, { resolve: (r: SystemOneResponse) => void; reject: (e: Error) => void; onPartial?: (qid: string, a: Answer) => void }>();
+const pending = new Map<number, { resolve: (r: SystemOneResponse, t: Timing) => void; reject: (e: Error) => void; onPartial?: (qid: string, a: Answer) => void }>();
 
 const hasWebGPU = "gpu" in navigator && !!(await (navigator as Navigator & { gpu: { requestAdapter(): Promise<unknown> } }).gpu.requestAdapter().catch(() => null));
 
 for (const m of models) $<HTMLSelectElement>("model").add(new Option(m, m));
-for (const name of Object.keys(presets)) $<HTMLSelectElement>("preset").add(new Option(name, name));
+for (const name of [...Object.keys(presets), ...Object.keys(imagePresets)]) $<HTMLSelectElement>("preset").add(new Option(name, name));
 
 const device = $<HTMLSelectElement>("device");
 device.value = hasWebGPU ? store.get("device") ?? "webgpu" : "wasm";
@@ -29,11 +30,56 @@ if (!hasWebGPU) { device.options[0].disabled = true; device.title = "This browse
 $<HTMLSelectElement>("model").value = store.get("model") ?? models[0];
 
 const request = $<HTMLTextAreaElement>("request");
-const setPreset = () => { request.value = JSON.stringify(presets[$<HTMLSelectElement>("preset").value], null, 2); store.set("request", request.value); };
+let image: ImageData | null = null;
+const setPreset = () => {
+  const name = $<HTMLSelectElement>("preset").value, withImage = imagePresets[name];
+  request.value = JSON.stringify(withImage?.request ?? presets[name], null, 2); store.set("request", request.value);
+  if (withImage) void setImage(withImage.image, name.replace(/^Image: /, "")); else clearImage();
+};
 $("preset").onchange = setPreset;
 request.value = store.get("request") ?? "";
 request.oninput = () => store.set("request", request.value);
+clearImage();
 if (!request.value) setPreset();
+
+// ---- image input: decoded to RGBA pixels here, sent to the worker with the request ----
+async function setImage(src: Blob | string, name: string) {
+  try {
+    const blob = typeof src === "string" ? await (await fetch(src)).blob() : src;
+    // no colour-space conversion: the pixels as stored, which is what Qwen's processor sees through PIL
+    const bitmap = await createImageBitmap(blob, { colorSpaceConversion: "none", premultiplyAlpha: "none" });
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(bitmap, 0, 0);
+    image = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+    bitmap.close();
+    const thumb = $<HTMLImageElement>("thumb");
+    if (thumb.src.startsWith("blob:")) URL.revokeObjectURL(thumb.src);
+    thumb.src = typeof src === "string" ? src : URL.createObjectURL(blob);
+    $("image-box").classList.add("has-image");
+    $("image-name").textContent = `${name} · ${image.width}×${image.height}`;
+  } catch (e) {
+    clearImage();
+    $("image-name").textContent = `could not read the image: ${(e as Error).message}`;
+  }
+}
+function clearImage() {
+  image = null;
+  $("image-box").classList.remove("has-image");
+  $("image-name").textContent = "No image. A model with a vision tower can take one in front of the state.";
+}
+$<HTMLInputElement>("image-file").onchange = (e) => {
+  const f = (e.target as HTMLInputElement).files?.[0];
+  if (f) void setImage(f, f.name);
+  (e.target as HTMLInputElement).value = "";
+};
+$("image-clear").onclick = clearImage;
+$("image-box").ondragover = (e) => e.preventDefault();
+$("image-box").ondrop = (e) => {
+  e.preventDefault();
+  const f = e.dataTransfer?.files[0];
+  if (f?.type.startsWith("image/")) void setImage(f, f.name);
+};
 
 /** Models whose weights finished downloading here before, with the revision they were: a republished checkpoint
  * is a new download even though the URLs are the same. The loader still checks every file's size. */
@@ -45,8 +91,9 @@ async function refreshVariants() {
   const model = $<HTMLSelectElement>("model").value;
   const sel = $<HTMLSelectElement>("variant"); sel.innerHTML = "";
   const res = await fetch(`${modelUrl(model)}/manifest.json`);
-  if (!res.ok) { sel.innerHTML = ""; sel.add(new Option("unavailable", "")); status(`${model} is not published yet.`, "err"); return; }
-  const manifest = (await res.json()) as KevManifest;
+  // the dev server answers a missing file with index.html
+  const manifest = res.ok ? ((await res.json().catch(() => null)) as KevManifest | null) : null;
+  if (!manifest) { sel.innerHTML = ""; sel.add(new Option("unavailable", "")); status(`${model} is not published yet.`, "err"); return; }
   revisions.set(model, manifest.run);
   for (const [name, v] of Object.entries(manifest.variants)) {
     if (name === "fp32") continue;   // fp32 is for Node parity tests; too large for a tab
@@ -69,7 +116,7 @@ $("variant").onchange = () => { store.set(`variant:${$<HTMLSelectElement>("model
 $("device").onchange = () => store.set("device", device.value);
 await refreshVariants();
 
-const status = (s: string, cls = "") => { const el = $("status"); el.textContent = s; el.className = cls; };
+function status(s: string, cls = "") { const el = $("status"); el.textContent = s; el.className = cls; }
 const send = (m: WorkerRequest) => worker.postMessage(m);
 const setBusy = (busy: boolean) => {
   $<HTMLButtonElement>("run").disabled = $<HTMLButtonElement>("separate").disabled = busy || !ready;
@@ -120,12 +167,12 @@ worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
     const model = $<HTMLSelectElement>("model").value;
     store.set(cacheKey(model, m.variant), revisions.get(model) ?? "");
     void refreshVariants();
-    status(`Ready · ${m.variant} on ${m.device} · T=${m.temperature.toFixed(2)} · load ${(m.loadMs / 1000).toFixed(1)} s, warm-up ${(m.warmupMs / 1000).toFixed(1)} s`);
+    status(`Ready · ${m.variant}${m.images ? " + vision" : ""} on ${m.device} · T=${m.temperature.toFixed(2)} · load ${(m.loadMs / 1000).toFixed(1)} s, warm-up ${(m.warmupMs / 1000).toFixed(1)} s`);
     setBusy(false);
   } else if (m.type === "partial") {
     pending.get(m.id)?.onPartial?.(m.qid, m.answer as Answer);
   } else if (m.type === "result") {
-    pending.get(m.id)?.resolve(m.response as SystemOneResponse); pending.delete(m.id);
+    pending.get(m.id)?.resolve(m.response as SystemOneResponse, m.timing); pending.delete(m.id);
   } else if (m.type === "error") {
     $("progress").classList.remove("active");
     if (m.id !== undefined) { pending.get(m.id)?.reject(new Error(m.message)); pending.delete(m.id); }
@@ -133,10 +180,13 @@ worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
   }
 };
 
-function systemOne(req: unknown, mode: "packed" | "separate" | "probs" = "packed", onPartial?: (qid: string, a: Answer) => void): Promise<SystemOneResponse> {
+function systemOne(req: unknown, mode: "packed" | "separate" | "probs" = "packed", onPartial?: (qid: string, a: Answer) => void, timing?: (t: Timing) => void): Promise<SystemOneResponse> {
   const id = nextId++;
   const dateFacts = $<HTMLInputElement>("date-facts").checked;
-  return new Promise((resolve, reject) => { pending.set(id, { resolve, reject, onPartial }); send({ type: "run", id, request: req, mode, dateFacts }); });
+  return new Promise((resolve, reject) => {
+    pending.set(id, { resolve: (r, t) => { timing?.(t); resolve(r); }, reject, onPartial });
+    send({ type: "run", id, request: req, mode, dateFacts });
+  });
 }
 // console access: await kev.systemOne({...})
 (window as unknown as { kev: unknown }).kev = { systemOne: (r: unknown) => systemOne(r), systemOneSeparate: (r: unknown) => systemOne(r, "separate"), probs: (rec: unknown) => systemOne(rec, "probs") };
@@ -190,15 +240,19 @@ function fill(id: string, a: Answer, cmp?: Answer) {
 }
 
 async function run(mode: "packed" | "separate") {
-  let req: { questions?: Record<string, unknown> };
+  let req: { questions?: Record<string, unknown>; image?: unknown };
   try { req = JSON.parse(request.value); } catch (e) { $("answers").innerHTML = `<p class="err">Invalid JSON: ${(e as Error).message}</p>`; return; }
   setBusy(true);
   skeleton(Object.keys(req.questions ?? {}));
   try {
-    const r = await systemOne(req, "packed", (qid, a) => fill(qid, a));
+    if (image) req = { ...req, image };
+    let t: Timing | undefined;
+    const r = await systemOne(req, "packed", (qid, a) => fill(qid, a), (x) => (t = x));
     const other = mode === "separate" ? await systemOne(req, "separate") : undefined;
     for (const [id, a] of Object.entries(r.answers)) fill(id, a, other?.answers[id]);
-    $("run-meta")!.textContent = `${r.latency_ms} ms · ${r.usage.input_tokens} input tokens` + (other ? ` · separate: ${other.latency_ms} ms` : "");
+    const split = t && t.imageTokens ? ` (vision ${Math.round(t.preprocess + t.vision)} ms, ${t.imageTokens} image tokens; decoder ${Math.round(t.state + t.branches)} ms)`
+      : t?.cached && image ? " (image and state cached)" : "";
+    $("run-meta")!.textContent = `${r.latency_ms} ms${split} · ${r.usage.input_tokens} input tokens` + (other ? ` · separate: ${other.latency_ms} ms` : "");
     $("raw").textContent = JSON.stringify(other ? { packed: r, separate: other } : r, null, 2);
   } catch (e) {
     const p = document.createElement("p"); p.className = "err"; p.textContent = (e as Error).message; $("answers").replaceChildren(p);
@@ -217,7 +271,7 @@ const MODEL_FACTS: Record<string, { size: string; acc: string; ms: string }> = {
   "kev-9b": { size: "8.8 GB", acc: "0.800 / 0.318", ms: "570 ms" },
 };
 const table = document.getElementById("model-table");
-if (table) table.innerHTML = models.map((m) => {
+if (table) table.innerHTML = models.filter((m) => MODEL_FACTS[m]).map((m) => {
   const f = MODEL_FACTS[m];
   return `<tr><td><code>${m}</code></td><td>${f.size}</td><td>${f.acc}</td><td>${f.ms}</td></tr>`;
 }).join("");
