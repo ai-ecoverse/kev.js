@@ -33,17 +33,19 @@ test("a file cut short in OPFS fails the load by name", async ({ page }) => {
 for (const ep of ["wasm", "webgpu"] as const) {
   test(`Kev-0.8B q8f32 from OPFS on ${ep} matches the PyTorch reference`, async ({ page }) => {
     test.setTimeout(20 * 60_000);
-    // WASM (and WebGPU on a software adapter) takes about a second per fixture; KEV_BROWSER_FIXTURES caps the count
-    const limit = Number(process.env.KEV_BROWSER_FIXTURES) || (ep === "wasm" ? 12 : undefined);
+    // every fixture by default (WASM: about a second each); KEV_BROWSER_FIXTURES caps the count for a slow adapter
+    const limit = Number(process.env.KEV_BROWSER_FIXTURES) || undefined;
     const r = await run(page, "model", { ep, limit });
     if (r.skip) {
       const required = process.env[String(r.skip).includes("WebGPU") ? "KEV_REQUIRE_WEBGPU" : "KEV_REQUIRE_MODEL"] === "1";
       expect(required ? r.skip : undefined, "required case could not run").toBeUndefined();
       test.skip(true, String(r.skip));
     }
-    console.log(`[${ep}] ${JSON.stringify({ adapter: r.adapter, fixtures: r.fixtures, questions: r.questions, worst: r.worst, flips: r.flips, loadMs: r.loadMs, msPerFixture: r.msPerFixture })}`);
+    console.log(`[${ep}] ${JSON.stringify({ adapter: r.adapter, fixtures: r.fixtures, questions: r.questions, worst: r.worst, worstAt: r.worstAt, flips: r.flips, loadMs: r.loadMs, msPerFixture: r.msPerFixture })}`);
     expect(r.fixtureRun, "fixtures and weights come from the same checkpoint").toBe(r.run);
-    expect(r.worst as number).toBeLessThanOrEqual(r.bound as number);
+    const bound = r.bound as { maxAbsDp: number; argmaxFlips: number };
+    expect(r.worst as number, `max |dp| at ${r.worstAt}`).toBeLessThanOrEqual(bound.maxAbsDp);
+    expect(r.flips as number, "argmax flips").toBeLessThanOrEqual(bound.argmaxFlips);
     expect(r.answerKeys).toEqual(r.expectedAnswerKeys);
     expect(r.modelFetches, "no model file is fetched when loading from OPFS").toEqual([]);
     expect(r.caches, "nothing is written to Cache Storage").toEqual([]);

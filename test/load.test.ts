@@ -6,6 +6,7 @@ import { readFile } from "node:fs/promises";
 import * as ort from "onnxruntime-node";
 import { loadKev, modelFiles, type KevManifest, type OrtModule, type Progress, type ReadModelFile } from "../src/index.ts";
 import { fixtures, haveModel, modelDir, tokenizerFiles } from "./fixtures.ts";
+import { argmax, parityBound } from "./parity.ts";
 import { stubOrt, syntheticBundle, withoutFetch } from "./synthetic.ts";
 
 async function bundle() {
@@ -76,10 +77,13 @@ test("modelFiles lists what a variant loads, with sizes", async () => {
 
 test("q8f32 loaded from local files matches the PyTorch reference", { skip: !haveModel && "no bundle" }, async () => {
   const kev = await withoutFetch(() => loadKev((p) => readFile(`${modelDir}/${p}`), { ort: ort as unknown as OrtModule, variant: "q8f32", executionProviders: ["cpu"], temperature: 1 }));
-  const bound = (kev.manifest.variants.q8f32.parity?.max_abs_dp ?? 0.1) + 1e-3;
+  const bound = parityBound(kev.manifest, "q8f32");
   for (const f of fixtures.slice(0, 3)) {
     const probs = await kev.probs(f.record);
-    probs.forEach((p, k) => p.forEach((x, j) => assert.ok(Math.abs(x - f.probs[k][j]) <= bound, `${f.name} q${k} opt${j}`)));
+    probs.forEach((p, k) => {
+      p.forEach((x, j) => assert.ok(Math.abs(x - f.probs[k][j]) <= bound.maxAbsDp, `${f.name} q${k} opt${j}`));
+      assert.equal(argmax(p), argmax(f.probs[k]), `${f.name} q${k} argmax`);
+    });
   }
   await kev.release();
 });

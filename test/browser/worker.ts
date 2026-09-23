@@ -4,6 +4,7 @@ import wasm from "onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url";
 import mjs from "onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url";
 import { loadKev, modelFiles, type KevManifest, type OrtModule } from "../../src/index.ts";
 import type { Fixture } from "../fixtures.ts";
+import { argmax, parityBound } from "../parity.ts";
 import { stubOrt, syntheticBundle, withoutFetch } from "../synthetic.ts";
 
 ort.env.wasm.wasmPaths = { wasm, mjs };
@@ -141,14 +142,14 @@ const cases = {
     say(`${model} ${variant}: loaded from OPFS on ${ep}${adapter ? ` (${adapter})` : ""} in ${Math.round(loadMs)} ms`);
 
     const fx = (await (await fetch(`/fixtures/${model}.json`)).json()) as { run: string; fixtures: Fixture[] };
-    const argmax = (p: number[]) => p.indexOf(Math.max(...p));
-    let worst = 0, flips = 0, questions = 0;
+    let worst = 0, worstAt = "", flips = 0, questions = 0;
     const t2 = performance.now();
     const sample = fx.fixtures.slice(0, o.limit ?? fx.fixtures.length);
     for (const f of sample) {
       (await kev.probs(f.record)).forEach((p, k) => {
         questions++;
-        worst = Math.max(worst, ...p.map((x, j) => Math.abs(x - f.probs[k][j])));
+        const d = Math.max(...p.map((x, j) => Math.abs(x - f.probs[k][j])));
+        if (d > worst) { worst = d; worstAt = `${f.name} q${k}`; }
         if (argmax(p) !== argmax(f.probs[k])) flips++;
       });
     }
@@ -156,8 +157,8 @@ const cases = {
     const answers = (await kev.systemOne(sample[0].request)).answers;
     await kev.release();
     return {
-      ep, adapter, run: manifest.run, fixtureRun: fx.run, fixtures: sample.length, questions, worst, flips,
-      bound: (manifest.variants[variant].parity?.max_abs_dp ?? 0.1) + 1e-3,
+      ep, adapter, run: manifest.run, fixtureRun: fx.run, fixtures: sample.length, questions, worst, worstAt, flips,
+      bound: parityBound(manifest, variant),
       answerKeys: Object.keys(answers), expectedAnswerKeys: Object.keys(sample[0].answers),
       modelFetches: fetched.filter((u) => u.includes("/models/")), caches: await caches.keys(),
       loadMs: Math.round(loadMs), msPerFixture: Math.round(msPerFixture),
