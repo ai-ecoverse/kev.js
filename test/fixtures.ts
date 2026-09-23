@@ -43,6 +43,12 @@ async function fetchText(url: string, attempts = 4): Promise<string> {
 /** The tokenizer the bundle ships: the local bundle or build output when present, else the published copy on Hugging
  * Face (cached in the OS temp dir), so CI can run the encoding tests without weights. */
 export async function tokenizer(): Promise<Tokenizer> {
+  const { tokenizer: tok, tokenizer_config: cfg } = await tokenizerFiles();
+  return new Tokenizer(JSON.parse(tok), JSON.parse(cfg));
+}
+
+/** tokenizer.json and tokenizer_config.json as text, from the same places as tokenizer(). */
+export async function tokenizerFiles(): Promise<{ tokenizer: string; tokenizer_config: string }> {
   // follow the manifest: files live under a revision directory (r-<sha>/)
   const read = async (f: "tokenizer" | "tokenizer_config") => {
     const localManifest = `${modelDir}/manifest.json`;
@@ -55,5 +61,5 @@ export async function tokenizer(): Promise<Tokenizer> {
     if (!existsSync(cached)) writeFileSync(cached, await fetchText(`${HF}/${model}/${path}`));
     return readFileSync(cached, "utf8");
   };
-  return new Tokenizer(JSON.parse(await read("tokenizer")), JSON.parse(await read("tokenizer_config")));
+  return { tokenizer: await read("tokenizer"), tokenizer_config: await read("tokenizer_config") };
 }

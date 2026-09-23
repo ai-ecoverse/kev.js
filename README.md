@@ -141,7 +141,18 @@ WASM fallback runs single-threaded; WebGPU is unaffected.
 `kev.systemOne(req, { onAnswer })` reports each question as it finishes, so a UI can fill answers in as they land.
 `kev.systemOneSeparate()` answers each question in its own pass. `kev.probs(record)` returns probabilities after the
 checkpoint temperature. `kev.systemOne(req, { dateFacts: true })` is `KEV_DATE_FACTS=1`.
-Weight files are cached in Cache Storage (`kev-web-v1`). In the demo page, `window.kev.systemOne(...)` works from
+Weight files are cached in Cache Storage (`kev-web-v1`).
+
+`loadKev` also reads a bundle that is already on disk, in place: pass a directory handle that holds it (OPFS, or
+`showDirectoryPicker()`) or a function that reads a file by its bundle path, instead of a URL. Nothing is fetched and
+nothing is copied into Cache Storage, so a 9 GB model is stored once. `modelFiles(manifest, variant)` lists the files a
+variant loads with their sizes, for a download or resume step; a local file of the wrong size fails the load by name.
+
+```ts
+const opfs = await (await navigator.storage.getDirectory()).getDirectoryHandle("kev-9b");
+const kev = await loadKev(opfs, { ort, variant: "q8f32" });
+// or through a virtual file system: loadKev((path) => fs.readFileBinary(`/models/kev-9b/${path}`), { ort })
+``` In the demo page, `window.kev.systemOne(...)` works from
 the console, and `?verbose` logs where onnxruntime placed each node.
 
 ## Testing
