@@ -1,3 +1,10 @@
+# [0.3.0](https://github.com/ai-ecoverse/kev.js/compare/v0.2.0...v0.3.0) (2026-09-23)
+
+
+### Features
+
+* **api:** follow kev 557598f: 4-decimal probabilities, optional instructions, one-level scores ([bd3da87](https://github.com/ai-ecoverse/kev.js/commit/bd3da87e56dc4fa73901fce0b3b97d67d73e0608)), closes [jaredpalmer/kev#45](https://github.com/jaredpalmer/kev/issues/45) [#50](https://github.com/ai-ecoverse/kev.js/issues/50)
+
 # Changelog
 
 ## [0.2.0](https://github.com/ai-ecoverse/kev.js/releases/tag/v0.2.0) (2026-09-21)
