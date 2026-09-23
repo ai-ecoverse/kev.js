@@ -11,7 +11,7 @@ jobs:
       - uses: actions/checkout@v5
         with: { submodules: true }
       - uses: actions/setup-node@v5
-        with: { node-version: 22, cache: npm }
+        with: { node-version: 24, cache: npm }
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build:lib
@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
-        with: { node-version: 22, cache: npm }
+        with: { node-version: 24, cache: npm }
       - run: npm ci
       # weights are cached per published manifest: a new checkpoint on Hugging Face is a new key
       - id: bundle
