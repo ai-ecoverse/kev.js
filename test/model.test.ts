@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from "node:fs";
 import * as ort from "onnxruntime-node";
 import { Kev, PointerHead, type KevManifest, type OrtModule } from "../src/index.ts";
 import { fixtures, haveModel, modelDir, tokenizer } from "./fixtures.ts";
-import { maxAbsDp, NEAR_TIE, Parity } from "./parity.ts";
+import { bounds, Parity } from "./parity.ts";
 
 const manifest: KevManifest | null = haveModel ? JSON.parse(readFileSync(`${modelDir}/manifest.json`, "utf8")) : null;
 // default: the variants on disk (fetch-model downloads one); KEV_VARIANTS names them, and then a missing one fails
@@ -24,7 +24,6 @@ async function load(variant: string): Promise<Kev> {
 for (const variant of variants) {
   test(`${variant}: probabilities match the PyTorch reference`, { skip: !haveModel && "no bundle" }, async () => {
     const kev = await load(variant);
-    const bound = maxAbsDp(manifest!, variant);
     const parity = new Parity();
     for (const f of fixtures) {
       const r = await kev.systemOne(f.request);
@@ -34,8 +33,7 @@ for (const variant of variants) {
       assert.equal(r.usage.input_tokens, f.encoding.ids.length);
     }
     console.log(`${variant}: ${parity.summary()}`);
-    assert.ok(parity.worst <= bound, `max |dp| ${parity.worst} at ${parity.worstAt} > ${bound}`);
-    assert.deepEqual(parity.clearFlips, [], `answers changed where the reference margin exceeds ${NEAR_TIE}`);
+    assert.deepEqual(parity.violations(bounds(manifest!, variant)), []);
     await kev.release();
   });
 }

@@ -4,7 +4,7 @@ import wasm from "onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url";
 import mjs from "onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url";
 import { loadKev, modelFiles, type KevManifest, type OrtModule } from "../../src/index.ts";
 import type { Fixture } from "../fixtures.ts";
-import { maxAbsDp, Parity } from "../parity.ts";
+import { bounds, Parity } from "../parity.ts";
 import { stubOrt, syntheticBundle, withoutFetch } from "../synthetic.ts";
 
 ort.env.wasm.wasmPaths = { wasm, mjs };
@@ -155,7 +155,7 @@ const cases = {
     await kev.release();
     return {
       ep, adapter, copied, run: manifest.run, fixtureRun: fx.run, fixtures: sample.length, summary: parity.summary(),
-      worst: parity.worst, worstAt: parity.worstAt, clearFlips: parity.clearFlips, bound: maxAbsDp(manifest, variant),
+      violations: parity.violations(bounds(manifest, variant)),
       answerKeys: Object.keys(answers), expectedAnswerKeys: Object.keys(sample[0].answers),
       modelFetches: fetched.filter((u) => u.includes("/models/")), caches: await caches.keys(),
       loadMs: Math.round(loadMs), msPerFixture: Math.round(msPerFixture),

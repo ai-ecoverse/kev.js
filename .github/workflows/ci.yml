@@ -35,6 +35,8 @@ jobs:
       - uses: actions/cache@v4
         with: { path: public/models/kev-0.8b, key: "${{ steps.bundle.outputs.key }}" }
       - run: npm run fetch-model -- kev-0.8b q8f32
+      # int8 results depend on the CPU's kernels (AVX-512 or not): record which one this runner has
+      - run: lscpu | grep "Model name"; grep -owE "avx2|avx512[a-z_]*|avx_vnni|amx[a-z_]*" /proc/cpuinfo | sort -u | xargs
       - run: npm test
         env: { KEV_VARIANTS: q8f32 }
       - id: playwright

@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 import * as ort from "onnxruntime-node";
 import { loadKev, modelFiles, type KevManifest, type OrtModule, type Progress, type ReadModelFile } from "../src/index.ts";
 import { fixtures, haveModel, modelDir, tokenizerFiles } from "./fixtures.ts";
-import { maxAbsDp, NEAR_TIE, Parity } from "./parity.ts";
+import { bounds, Parity } from "./parity.ts";
 import { stubOrt, syntheticBundle, withoutFetch } from "./synthetic.ts";
 
 async function bundle() {
@@ -80,8 +80,7 @@ test("q8f32 loaded from local files matches the PyTorch reference", { skip: !hav
   const parity = new Parity();
   for (const f of fixtures.slice(0, 3)) (await kev.probs(f.record)).forEach((p, k) => parity.add(`${f.name} q${k}`, f.probs[k], p));
   console.log(`local files, q8f32: ${parity.summary()}`);
-  assert.ok(parity.worst <= maxAbsDp(kev.manifest, "q8f32"), `max |dp| ${parity.worst} at ${parity.worstAt}`);
-  assert.deepEqual(parity.clearFlips, [], `answers changed where the reference margin exceeds ${NEAR_TIE}`);
+  assert.deepEqual(parity.violations(bounds(kev.manifest, "q8f32")), []);
   await kev.release();
 });
 
@@ -93,4 +92,12 @@ test("the parity rule tolerates a flip on a near-tie and fails one on a clear an
   assert.deepEqual(p.flips.map((f) => f.at), ["near-tie", "clear"]);
   assert.deepEqual(p.clearFlips.map((f) => f.at), ["clear"]);
   assert.equal(p.worstAt, "clear");
+  assert.equal(p.violations({ max: 1, mean: 1 }).length, 1);                        // the clear flip
+  assert.equal(p.violations({ max: 0.2, mean: 0.1 }).length, 3);                    // flip, max 0.25, mean 0.1 + 1e-2
+});
+
+test("the parity rule catches a runtime-wide shift through the mean", () => {
+  const p = new Parity();
+  for (let i = 0; i < 10; i++) p.add(`q${i}`, [0.8, 0.2], [0.77, 0.23]);          // 0.03 everywhere, no flip, small max
+  assert.deepEqual(p.violations({ max: 0.19, mean: 0.02 }).map((v) => v.split(" ")[0]), ["mean"]);
 });
