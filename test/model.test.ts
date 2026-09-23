@@ -3,14 +3,16 @@
 import "./no-float16.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import * as ort from "onnxruntime-node";
 import { Kev, PointerHead, type KevManifest, type OrtModule } from "../src/index.ts";
 import { fixtures, haveModel, modelDir, tokenizer } from "./fixtures.ts";
-import { argmax, parityBound } from "./parity.ts";
+import { maxAbsDp, NEAR_TIE, Parity } from "./parity.ts";
 
 const manifest: KevManifest | null = haveModel ? JSON.parse(readFileSync(`${modelDir}/manifest.json`, "utf8")) : null;
-const variants = process.env.KEV_VARIANTS?.split(",") ?? Object.keys(manifest?.variants ?? {});
+// default: the variants on disk (fetch-model downloads one); KEV_VARIANTS names them, and then a missing one fails
+const variants = process.env.KEV_VARIANTS?.split(",")
+  ?? Object.entries(manifest?.variants ?? {}).filter(([, v]) => existsSync(`${modelDir}/${v.model}`)).map(([name]) => name);
 
 async function load(variant: string): Promise<Kev> {
   const v = manifest!.variants[variant];
@@ -22,22 +24,18 @@ async function load(variant: string): Promise<Kev> {
 for (const variant of variants) {
   test(`${variant}: probabilities match the PyTorch reference`, { skip: !haveModel && "no bundle" }, async () => {
     const kev = await load(variant);
-    const bound = parityBound(manifest!, variant);
-    let worst = 0, worstAt = "", flips = 0;
+    const bound = maxAbsDp(manifest!, variant);
+    const parity = new Parity();
     for (const f of fixtures) {
       const r = await kev.systemOne(f.request);
       const probs = await kev.probs(f.record);   // second call: exercises the state cache
-      probs.forEach((p, k) => {
-        const d = Math.max(...p.map((x, j) => Math.abs(x - f.probs[k][j])));
-        if (d > worst) { worst = d; worstAt = `${f.name} q${k}`; }
-        if (argmax(p) !== argmax(f.probs[k])) flips++;
-      });
+      probs.forEach((p, k) => parity.add(`${f.name} q${k}`, f.probs[k], p));
       if (variant === "fp32") assert.deepEqual(Object.fromEntries(Object.entries(r.answers).map(([k, a]) => [k, a.type])), Object.fromEntries(Object.entries(f.answers).map(([k, a]) => [k, a.type])));
       assert.equal(r.usage.input_tokens, f.encoding.ids.length);
     }
-    console.log(`${variant}: max |dp| ${worst.toExponential(2)} (${worstAt}), ${flips} argmax flips over ${fixtures.length} fixtures`);
-    assert.ok(worst <= bound.maxAbsDp, `max |dp| ${worst} at ${worstAt} > ${bound.maxAbsDp}`);
-    assert.ok(flips <= bound.argmaxFlips, `${flips} argmax flips > ${bound.argmaxFlips}`);
+    console.log(`${variant}: ${parity.summary()}`);
+    assert.ok(parity.worst <= bound, `max |dp| ${parity.worst} at ${parity.worstAt} > ${bound}`);
+    assert.deepEqual(parity.clearFlips, [], `answers changed where the reference margin exceeds ${NEAR_TIE}`);
     await kev.release();
   });
 }

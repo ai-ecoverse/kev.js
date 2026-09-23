@@ -41,11 +41,10 @@ for (const ep of ["wasm", "webgpu"] as const) {
       expect(required ? r.skip : undefined, "required case could not run").toBeUndefined();
       test.skip(true, String(r.skip));
     }
-    console.log(`[${ep}] ${JSON.stringify({ adapter: r.adapter, fixtures: r.fixtures, questions: r.questions, worst: r.worst, worstAt: r.worstAt, flips: r.flips, loadMs: r.loadMs, msPerFixture: r.msPerFixture })}`);
+    console.log(`[${ep}${r.adapter ? `, ${r.adapter}` : ""}] ${r.fixtures} fixtures, ${r.summary}; load ${r.loadMs} ms, ${r.msPerFixture} ms/fixture`);
     expect(r.fixtureRun, "fixtures and weights come from the same checkpoint").toBe(r.run);
-    const bound = r.bound as { maxAbsDp: number; argmaxFlips: number };
-    expect(r.worst as number, `max |dp| at ${r.worstAt}`).toBeLessThanOrEqual(bound.maxAbsDp);
-    expect(r.flips as number, "argmax flips").toBeLessThanOrEqual(bound.argmaxFlips);
+    expect(r.worst as number, `max |dp| at ${r.worstAt}`).toBeLessThanOrEqual(r.bound as number);
+    expect(r.clearFlips, "answers changed only where the reference is a near-tie").toEqual([]);
     expect(r.answerKeys).toEqual(r.expectedAnswerKeys);
     expect(r.modelFetches, "no model file is fetched when loading from OPFS").toEqual([]);
     expect(r.caches, "nothing is written to Cache Storage").toEqual([]);

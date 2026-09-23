@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, writeFileSync } from "node:fs";
+import { readFileSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,7 +58,12 @@ export async function tokenizerFiles(): Promise<{ tokenizer: string; tokenizer_c
     const manifest = JSON.parse(await fetchText(`${HF}/${model}/manifest.json`));
     const path = manifest.files[f] as string;
     const cached = join(tmpdir(), `kev-js-${model}-${path.replaceAll("/", "_")}`);   // path carries the revision
-    if (!existsSync(cached)) writeFileSync(cached, await fetchText(`${HF}/${model}/${path}`));
+    if (!existsSync(cached)) {
+      // test files run in parallel processes: write aside and rename, so no reader sees a partial file
+      const part = `${cached}.${process.pid}.part`;
+      writeFileSync(part, await fetchText(`${HF}/${model}/${path}`));
+      renameSync(part, cached);
+    }
     return readFileSync(cached, "utf8");
   };
   return { tokenizer: await read("tokenizer"), tokenizer_config: await read("tokenizer_config") };

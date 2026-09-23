@@ -4,7 +4,7 @@ import wasm from "onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url";
 import mjs from "onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url";
 import { loadKev, modelFiles, type KevManifest, type OrtModule } from "../../src/index.ts";
 import type { Fixture } from "../fixtures.ts";
-import { argmax, parityBound } from "../parity.ts";
+import { maxAbsDp, Parity } from "../parity.ts";
 import { stubOrt, syntheticBundle, withoutFetch } from "../synthetic.ts";
 
 ort.env.wasm.wasmPaths = { wasm, mjs };
@@ -142,23 +142,18 @@ const cases = {
     say(`${model} ${variant}: loaded from OPFS on ${ep}${adapter ? ` (${adapter})` : ""} in ${Math.round(loadMs)} ms`);
 
     const fx = (await (await fetch(`/fixtures/${model}.json`)).json()) as { run: string; fixtures: Fixture[] };
-    let worst = 0, worstAt = "", flips = 0, questions = 0;
+    const parity = new Parity();
     const t2 = performance.now();
     const sample = fx.fixtures.slice(0, o.limit ?? fx.fixtures.length);
     for (const f of sample) {
-      (await kev.probs(f.record)).forEach((p, k) => {
-        questions++;
-        const d = Math.max(...p.map((x, j) => Math.abs(x - f.probs[k][j])));
-        if (d > worst) { worst = d; worstAt = `${f.name} q${k}`; }
-        if (argmax(p) !== argmax(f.probs[k])) flips++;
-      });
+      (await kev.probs(f.record)).forEach((p, k) => parity.add(`${f.name} q${k}`, f.probs[k], p));
     }
     const msPerFixture = (performance.now() - t2) / sample.length;
     const answers = (await kev.systemOne(sample[0].request)).answers;
     await kev.release();
     return {
-      ep, adapter, run: manifest.run, fixtureRun: fx.run, fixtures: sample.length, questions, worst, worstAt, flips,
-      bound: parityBound(manifest, variant),
+      ep, adapter, run: manifest.run, fixtureRun: fx.run, fixtures: sample.length, summary: parity.summary(),
+      worst: parity.worst, worstAt: parity.worstAt, clearFlips: parity.clearFlips, bound: maxAbsDp(manifest, variant),
       answerKeys: Object.keys(answers), expectedAnswerKeys: Object.keys(sample[0].answers),
       modelFetches: fetched.filter((u) => u.includes("/models/")), caches: await caches.keys(),
       loadMs: Math.round(loadMs), msPerFixture: Math.round(msPerFixture),

@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 import * as ort from "onnxruntime-node";
 import { loadKev, modelFiles, type KevManifest, type OrtModule, type Progress, type ReadModelFile } from "../src/index.ts";
 import { fixtures, haveModel, modelDir, tokenizerFiles } from "./fixtures.ts";
-import { argmax, parityBound } from "./parity.ts";
+import { maxAbsDp, NEAR_TIE, Parity } from "./parity.ts";
 import { stubOrt, syntheticBundle, withoutFetch } from "./synthetic.ts";
 
 async function bundle() {
@@ -77,13 +77,20 @@ test("modelFiles lists what a variant loads, with sizes", async () => {
 
 test("q8f32 loaded from local files matches the PyTorch reference", { skip: !haveModel && "no bundle" }, async () => {
   const kev = await withoutFetch(() => loadKev((p) => readFile(`${modelDir}/${p}`), { ort: ort as unknown as OrtModule, variant: "q8f32", executionProviders: ["cpu"], temperature: 1 }));
-  const bound = parityBound(kev.manifest, "q8f32");
-  for (const f of fixtures.slice(0, 3)) {
-    const probs = await kev.probs(f.record);
-    probs.forEach((p, k) => {
-      p.forEach((x, j) => assert.ok(Math.abs(x - f.probs[k][j]) <= bound.maxAbsDp, `${f.name} q${k} opt${j}`));
-      assert.equal(argmax(p), argmax(f.probs[k]), `${f.name} q${k} argmax`);
-    });
-  }
+  const parity = new Parity();
+  for (const f of fixtures.slice(0, 3)) (await kev.probs(f.record)).forEach((p, k) => parity.add(`${f.name} q${k}`, f.probs[k], p));
+  console.log(`local files, q8f32: ${parity.summary()}`);
+  assert.ok(parity.worst <= maxAbsDp(kev.manifest, "q8f32"), `max |dp| ${parity.worst} at ${parity.worstAt}`);
+  assert.deepEqual(parity.clearFlips, [], `answers changed where the reference margin exceeds ${NEAR_TIE}`);
   await kev.release();
+});
+
+test("the parity rule tolerates a flip on a near-tie and fails one on a clear answer", () => {
+  const p = new Parity();
+  p.add("near-tie", [0.442, 0.421, 0.137], [0.43, 0.44, 0.13]);
+  p.add("clear", [0.7, 0.3], [0.45, 0.55]);
+  p.add("same", [0.9, 0.1], [0.85, 0.15]);
+  assert.deepEqual(p.flips.map((f) => f.at), ["near-tie", "clear"]);
+  assert.deepEqual(p.clearFlips.map((f) => f.at), ["clear"]);
+  assert.equal(p.worstAt, "clear");
 });
