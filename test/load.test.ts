@@ -93,11 +93,13 @@ test("the parity rule tolerates a flip on a near-tie and fails one on a clear an
   assert.deepEqual(p.clearFlips.map((f) => f.at), ["clear"]);
   assert.equal(p.worstAt, "clear");
   assert.equal(p.violations({ max: 1, mean: 1 }).length, 1);                        // the clear flip
-  assert.equal(p.violations({ max: 0.2, mean: 0.1 }).length, 3);                    // flip, max 0.25, mean 0.1 + 1e-2
+  assert.equal(p.violations({ max: 0.2, mean: 0.01 }).length, 2);                   // flip and max 0.25; 3 questions: no mean verdict
 });
 
-test("the parity rule catches a runtime-wide shift through the mean", () => {
+test("the parity rule catches a runtime-wide shift through the mean, over enough questions", () => {
   const p = new Parity();
-  for (let i = 0; i < 10; i++) p.add(`q${i}`, [0.8, 0.2], [0.77, 0.23]);          // 0.03 everywhere, no flip, small max
+  for (let i = 0; i < 6; i++) p.add(`q${i}`, [0.8, 0.2], [0.77, 0.23]);           // 0.03 everywhere, no flip, small max
+  assert.deepEqual(p.violations({ max: 0.19, mean: 0.02 }), []);                    // six questions: no mean verdict
+  for (let i = 6; i < 20; i++) p.add(`q${i}`, [0.8, 0.2], [0.77, 0.23]);
   assert.deepEqual(p.violations({ max: 0.19, mean: 0.02 }).map((v) => v.split(" ")[0]), ["mean"]);
 });

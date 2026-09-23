@@ -2,13 +2,16 @@
 // variant's error is heavy-tailed and its tail depends on the int8 kernels, which differ by CPU (x86-64 runners with and
 // without AVX-512 differ), WASM and WebGPU: kev-0.8b q8f32 moves mmlu/test/8047 by 0.086 (WebGPU, WASM), 0.0967 (arm64,
 // the manifest's measurement), 0.0993 and 0.124 (two x86-64 runners), while the mean over questions stays near 0.008.
-// So: the mean catches a runtime bug (it shifts many questions), the maximum is capped at twice the manifest's figure,
+// So: the mean catches a runtime bug (it shifts many questions), over at least MEAN_MIN_QUESTIONS (a handful of
+// questions measures those questions: WebGPU on SwiftShader, two tickets and one near-tie among their six questions,
+// has mean 0.018); the maximum is capped at twice the manifest's figure,
 // and an answer may change only where the reference itself is a near-tie (its margin between the two answers is at
 // most NEAR_TIE; readme-ticket's department question, 0.442 / 0.421, flips on some x86-64 runners).
 import type { KevManifest } from "../src/index.ts";
 
 export const NEAR_TIE = 0.05;
 export const MEAN_ABS_DP = 0.02;
+export const MEAN_MIN_QUESTIONS = 20;
 
 export const argmax = (p: number[]) => p.indexOf(Math.max(...p));
 
@@ -39,7 +42,7 @@ export class Parity {
   violations(b: { max: number; mean: number }): string[] {
     const out: string[] = [];
     if (this.worst > b.max) out.push(`max |dp| ${this.worst} at ${this.worstAt} > ${b.max}`);
-    if (this.mean > b.mean) out.push(`mean |dp| ${this.mean} > ${b.mean}`);
+    if (this.questions >= MEAN_MIN_QUESTIONS && this.mean > b.mean) out.push(`mean |dp| ${this.mean} > ${b.mean} over ${this.questions} questions`);
     for (const f of this.clearFlips) out.push(`answer changed at ${f.at}, reference margin ${f.margin} > ${NEAR_TIE}`);
     return out;
   }
