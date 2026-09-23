@@ -1,15 +1,36 @@
 // Browser tests: the loader against the real OPFS, and the published model loaded from OPFS on onnxruntime-web.
 // KEV_REQUIRE_MODEL=1 turns a missing bundle into a failure, KEV_REQUIRE_WEBGPU=1 a missing WebGPU adapter (CI sets
 // what it provides), so a green run means the case ran.
-import { expect, test, type Page } from "@playwright/test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test as base, chromium, expect, type BrowserContext, type Page } from "@playwright/test";
 import type { CaseName, CaseResult } from "./worker.ts";
+
+// One persistent profile for the whole run, as a user's browser has: OPFS gets the on-disk quota (an incognito
+// context's is in memory, and a second copy of the 0.8B bundle exceeded it on CI), and the model copied into OPFS by
+// the first model case is found there by the next, which is the resume path.
+const test = base.extend<object, { profile: BrowserContext }>({
+  profile: [async ({ channel, launchOptions }, use) => {
+    const dir = await mkdtemp(join(tmpdir(), "kev-browser-"));
+    const context = await chromium.launchPersistentContext(dir, { ...launchOptions, channel });
+    await use(context);
+    await context.close();
+    await rm(dir, { recursive: true, force: true });
+  }, { scope: "worker" }],
+  page: async ({ profile, baseURL }, use) => {
+    const page = await profile.newPage();
+    await page.goto(baseURL!);
+    await use(page);
+    await page.close();
+  },
+});
 
 const run = (page: Page, name: CaseName, options: Record<string, unknown> = {}) =>
   page.evaluate(([n, o]) => window.harness.run(n as CaseName, o as Record<string, unknown>), [name, options] as const) as Promise<CaseResult>;
 
 test.beforeEach(async ({ page }) => {
   page.on("console", (m) => { if (m.type() === "error" || m.text().startsWith("kev-")) console.log(`[browser] ${m.text()}`); });
-  await page.goto("/");
   await page.waitForFunction(() => window.harness?.ready);
   expect(await page.evaluate(() => self.crossOriginIsolated)).toBe(true);
 });
@@ -36,6 +57,7 @@ for (const ep of ["wasm", "webgpu"] as const) {
     // every fixture by default (WASM: about a second each); KEV_BROWSER_FIXTURES caps the count for a slow adapter
     const limit = Number(process.env.KEV_BROWSER_FIXTURES) || undefined;
     const r = await run(page, "model", { ep, limit });
+    console.log(`[${ep}] ${r.skip ?? `copied ${r.copied} files into OPFS`}`);
     if (r.skip) {
       const required = process.env[String(r.skip).includes("WebGPU") ? "KEV_REQUIRE_WEBGPU" : "KEV_REQUIRE_MODEL"] === "1";
       expect(required ? r.skip : undefined, "required case could not run").toBeUndefined();

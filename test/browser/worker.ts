@@ -152,7 +152,7 @@ const cases = {
     const answers = (await kev.systemOne(sample[0].request)).answers;
     await kev.release();
     return {
-      ep, adapter, run: manifest.run, fixtureRun: fx.run, fixtures: sample.length, summary: parity.summary(),
+      ep, adapter, copied, run: manifest.run, fixtureRun: fx.run, fixtures: sample.length, summary: parity.summary(),
       worst: parity.worst, worstAt: parity.worstAt, clearFlips: parity.clearFlips, bound: maxAbsDp(manifest, variant),
       answerKeys: Object.keys(answers), expectedAnswerKeys: Object.keys(sample[0].answers),
       modelFetches: fetched.filter((u) => u.includes("/models/")), caches: await caches.keys(),
