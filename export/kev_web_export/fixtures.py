@@ -1,13 +1,18 @@
-"""Reference outputs from the PyTorch model (fp32, LoRA merged: kev.evaluate.load) for parity tests.
+"""Reference outputs from the PyTorch model (fp32, LoRA merged: kev.checkpoint.load) for parity tests.
 
 Each fixture keeps the API request, the rendered record, Kev's token encoding and the per-question probabilities, so
-the JS port can be checked stage by stage: rendering, tokenization/encoding, then the model itself."""
-import argparse, json, os, random
+the JS port can be checked stage by stage: rendering, tokenization/encoding, then the model itself.
+
+    uv run python -m kev_web_export.fixtures --refresh ../fixtures/kev-0.8b.json   # re-derive record/meta/answers only
+
+--refresh re-runs kev.api on each stored request and probabilities, without the model: after an API-only change
+upstream (rounding, metadata), the fixtures follow it while the probabilities stay those of the pinned weights."""
+import argparse, json, random
 import torch
 from . import KEV_ROOT  # noqa: F401
 from .pin import pin
 from kev.api import SystemOneRequest, to_record, to_answers
-from kev.evaluate import load
+from kev.checkpoint import LoadOptions, load
 from kev.model import encode, rows_of
 
 HAND = [
@@ -55,6 +60,16 @@ def load_dev(suite, n, seed):
         "labels": {qid: q["label"] for qid, q in r["questions"].items()}} for r in out]
 
 
+def refresh(path):
+    data = json.load(open(path))
+    for fx in data["fixtures"]:
+        rec, meta = to_record(SystemOneRequest.model_validate(fx["request"]))
+        for q in rec["questions"]: q["label"] = 0
+        fx.update(record=rec, meta=meta, answers=to_answers(fx["probs"], meta))
+    json.dump(data, open(path, "w"))
+    print(f"{path}: {len(data['fixtures'])} fixtures re-derived")
+
+
 @torch.no_grad()
 def main():
     ap = argparse.ArgumentParser()
@@ -62,13 +77,15 @@ def main():
     ap.add_argument("--suite", default="evals/v4/transfer-v4")
     ap.add_argument("--n", type=int, default=40)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out")
+    ap.add_argument("--refresh", metavar="FIXTURES", help="re-derive record, meta and answers of an existing fixtures file in place")
     a = ap.parse_args()
+    if a.refresh: return refresh(a.refresh)
+    if not a.out: ap.error("--out is required")
     a.run = pin(a.run)
     print(f"run: {a.run}")
     # raw logits: ONNX parity is against T=1. Serving applies the checkpoint temperature after the pointer head.
-    os.environ["KEV_TEMPERATURE"] = "1.0"
-    tok, m = load(a.run, "cpu")
+    tok, m = load(a.run, "cpu", LoadOptions(temperature=1.0))
     fixtures = []
     for fx in HAND + load_dev(a.suite, a.n, a.seed):
         req = SystemOneRequest.model_validate(fx["request"])

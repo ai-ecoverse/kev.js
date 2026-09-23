@@ -9,9 +9,9 @@
 
 export type JSONContent = string | number | boolean | null | JSONContent[] | { [key: string]: JSONContent };
 
-export interface NoulQuestion { type: "noul"; instructions: JSONContent; criteria?: { true?: JSONContent; false?: JSONContent } | null }
-export interface ChoiceQuestion { type: "choice"; instructions: JSONContent; criteria: Record<string, JSONContent> }
-export interface ScoreQuestion { type: "score"; instructions: JSONContent; criteria: JSONContent[] }
+export interface NoulQuestion { type: "noul"; instructions?: JSONContent; criteria?: { true?: JSONContent; false?: JSONContent } | null }
+export interface ChoiceQuestion { type: "choice"; instructions?: JSONContent; criteria: Record<string, JSONContent> }
+export interface ScoreQuestion { type: "score"; instructions?: JSONContent; criteria: JSONContent[] }
 export type Question = NoulQuestion | ChoiceQuestion | ScoreQuestion;
 
 export interface SystemOneRequest { state: JSONContent; model?: string; questions: Record<string, Question> }
@@ -31,10 +31,12 @@ export interface SystemOneResponse {
 /** Internal record consumed by encode(): rendered state and, per question, instruction + option texts. */
 export interface DecisionRecord { state: string; questions: { instr: string; options: string[] }[] }
 
+/** Per-question metadata to map probabilities back: `keys` are the names probabilities are reported under, in option
+ * order (criteria names for choice, ["false", "true"] for noul, level indices for score). */
 export type QuestionMeta =
-  | { id: string; type: "noul" }
+  | { id: string; type: "noul"; keys: string[] }
   | { id: string; type: "choice"; keys: string[] }
-  | { id: string; type: "score"; legend: Record<string, string> };
+  | { id: string; type: "score"; keys: string[]; legend: Record<string, string> };
 
 export const MAX_OPTIONS = 255;
 
@@ -50,7 +52,6 @@ export function validate(req: unknown): SystemOneRequest {
   if (!isObject(req.questions) || Object.keys(req.questions).length < 1) throw new ValidationError("questions must have at least 1 entry");
   for (const [id, q] of Object.entries(req.questions)) {
     if (!isObject(q)) throw new ValidationError(`questions.${id} must be an object`);
-    if (!("instructions" in q)) throw new ValidationError(`questions.${id}.instructions is required`);
     if (q.type === "noul") {
       if (q.criteria != null && !isObject(q.criteria)) throw new ValidationError(`questions.${id}.criteria must be an object`);
     } else if (q.type === "choice") {
@@ -58,8 +59,8 @@ export function validate(req: unknown): SystemOneRequest {
       const n = Object.keys(q.criteria).length;
       if (n < 1 || n > MAX_OPTIONS) throw new ValidationError(`criteria must have 1..${MAX_OPTIONS} options`);
     } else if (q.type === "score") {
-      if (!Array.isArray(q.criteria) || q.criteria.length < 2 || q.criteria.length > MAX_OPTIONS)
-        throw new ValidationError(`questions.${id}.criteria must be a list of 2..${MAX_OPTIONS} levels`);
+      if (!Array.isArray(q.criteria) || q.criteria.length < 1 || q.criteria.length > MAX_OPTIONS)
+        throw new ValidationError(`questions.${id}.criteria must be a list of 1..${MAX_OPTIONS} levels`);
     } else {
       throw new ValidationError(`questions.${id}.type must be noul, choice or score`);
     }
@@ -160,24 +161,31 @@ export function optionText(name: string, desc: JSONContent | undefined): string 
   return desc === null || desc === undefined || desc === "" ? name : `${name}: ${render(desc)}`;
 }
 
+/** Port of kev.api.question_keys: the keys a question's probabilities are reported under, in option order. */
+export function questionKeys(q: Question): string[] {
+  if (q.type === "choice") return Object.keys(q.criteria);
+  if (q.type === "noul") return ["false", "true"];
+  return q.criteria.map((_, i) => String(i));
+}
+
 export function toRecord(req: SystemOneRequest): { record: DecisionRecord; meta: QuestionMeta[] } {
   const questions: DecisionRecord["questions"] = [];
   const meta: QuestionMeta[] = [];
   for (const [id, q] of Object.entries(req.questions)) {
-    const instr = render(q.instructions);
+    const keys = questionKeys(q);
     let options: string[];
     if (q.type === "noul") {
       const c = q.criteria ?? {};
       options = [optionText("no", c.false), optionText("yes", c.true)];
-      meta.push({ id, type: "noul" });
+      meta.push({ id, type: "noul", keys });
     } else if (q.type === "choice") {
       options = Object.entries(q.criteria).map(([k, v]) => optionText(k, v));
-      meta.push({ id, type: "choice", keys: Object.keys(q.criteria) });
+      meta.push({ id, type: "choice", keys });
     } else {
       options = q.criteria.map((x) => render(x));
-      meta.push({ id, type: "score", legend: Object.fromEntries(q.criteria.map((x, i) => [String(i), render(x)])) });
+      meta.push({ id, type: "score", keys, legend: Object.fromEntries(keys.map((k, i) => [k, options[i]])) });
     }
-    questions.push({ instr, options });
+    questions.push({ instr: render(q.instructions), options });
   }
   return { record: { state: render(req.state), questions }, meta };
 }
@@ -191,34 +199,43 @@ export function choiceConfidence(p: number[]): number {
 
 /** Approximation of TypeSafe's 'distance from the modal level' statistic: 1 - E|level - mode| / (L - 1). */
 export function scoreConfidence(p: number[]): number {
+  if (p.length === 1) return 1;
   const mode = argmax(p);
   return 1 - p.reduce((s, pi, i) => s + pi * Math.abs(i - mode), 0) / (p.length - 1);
 }
 
-/** Python round(x, 2): nearest, exact ties to even. */
-export function r2(x: number): number {
-  const t = x * 100;
-  if (Number.isInteger(t * 2) && !Number.isInteger(t)) {
-    const f = Math.floor(t);
-    return (f % 2 === 0 ? f : f + 1) / 100;
+/** Python round(x, digits), which rounds the exact binary value: toFixed does the same, except that it breaks exact
+ * ties upward where Python breaks them to even. An exact tie is odd / 2^(digits+1) (0.125 at 2 digits, 0.03125 at 4);
+ * 0.015 is not one, since its double lies below it. */
+export function pyRound(x: number, digits: number): number {
+  const half = x * 2 ** (digits + 1);   // exact: scaling by a power of two
+  if (Number.isInteger(half) && half % 2 !== 0) {
+    const f = Math.floor(x * 10 ** digits);   // exact too: x * 10^digits is odd * 5^digits / 2
+    return (f % 2 === 0 ? f : f + 1) / 10 ** digits;
   }
-  return Number(x.toFixed(2));
+  return Number(x.toFixed(digits));
 }
+
+/** kev.api.round_prob: 4 decimals keep a rounded 255-option distribution within TypeSafe's |sum - 1| < 0.02. */
+export const roundProb = (x: number): number => pyRound(x, 4);
+
+/** @deprecated kev.serve rounds to 4 decimals now (roundProb); this is Python's round(x, 2). */
+export const r2 = (x: number): number => pyRound(x, 2);
 
 export function toAnswers(probs: number[][], meta: QuestionMeta[]): Record<string, Answer> {
   const out: Record<string, Answer> = {};
   probs.forEach((p, i) => {
     const m = meta[i];
-    if (m.type === "noul") out[m.id] = { type: "noul", noul: r2(p[1]) };
+    if (m.type === "noul") out[m.id] = { type: "noul", noul: roundProb(p[1]) };
     else if (m.type === "choice")
       out[m.id] = {
-        type: "choice", choice: m.keys[argmax(p)], confidence: r2(choiceConfidence(p)),
-        probabilities: Object.fromEntries(m.keys.map((k, j) => [k, r2(p[j])])),
+        type: "choice", choice: m.keys[argmax(p)], confidence: roundProb(choiceConfidence(p)),
+        probabilities: Object.fromEntries(m.keys.map((k, j) => [k, roundProb(p[j])])),
       };
     else
       out[m.id] = {
-        type: "score", score: r2(p.reduce((s, pi, j) => s + j * pi, 0)), legend: m.legend,
-        probabilities: Object.fromEntries(p.map((v, j) => [String(j), r2(v)])), confidence: r2(scoreConfidence(p)),
+        type: "score", score: roundProb(p.reduce((s, pi, j) => s + j * pi, 0)), legend: m.legend,
+        probabilities: Object.fromEntries(p.map((v, j) => [String(j), roundProb(v)])), confidence: roundProb(scoreConfidence(p)),
       };
   });
   return out;

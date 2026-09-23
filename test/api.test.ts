@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { dateFacts, pyFloat, r2, render, toAnswers, toRecord, validate, ValidationError, pyJsonDumps, withDateFacts } from "../src/api.ts";
+import { dateFacts, pyFloat, pyRound, render, roundProb, scoreConfidence, toAnswers, toRecord, validate, ValidationError, pyJsonDumps, withDateFacts } from "../src/api.ts";
 import { fixtures } from "./fixtures.ts";
 
 test("toRecord renders every fixture exactly like kev.api.to_record", () => {
@@ -19,8 +19,23 @@ test("Python formatting", () => {
   assert.equal(render({ a: true, b: null, c: [1, 2.5, { d: false }], e: 1e-7, f: 0.1 }), "a: True\nb: \nc:\n  - 1\n  - 2.5\n  - d: False\ne: 1e-07\nf: 0.1");
   for (const [x, s] of [[1, "1.0"], [0.5, "0.5"], [1e16, "1e+16"], [1234.5, "1234.5"], [0.0001, "0.0001"], [0.00001, "1e-05"], [123456789012345.6, "123456789012345.6"]] as const)
     assert.equal(pyFloat(x), s);
-  assert.equal(r2(0.125), 0.12); assert.equal(r2(0.375), 0.38); assert.equal(r2(0.4449), 0.44);
   assert.equal(pyJsonDumps({ a: { type: "noul", noul: 1 }, "é": [0, 0.25] }), '{"a": {"type": "noul", "noul": 1.0}, "\\u00e9": [0.0, 0.25]}');
+});
+
+test("pyRound matches Python's round(x, 2) and round(x, 4)", () => {
+  // [x, round(x, 2), round(x, 4)] from CPython. Exact ties (odd / 2^(digits+1)) go to even; 0.015 is below its tie.
+  const cases: [number, number, number][] = [
+    [0.015, 0.01, 0.015], [0.125, 0.12, 0.125], [0.375, 0.38, 0.375], [0.4449, 0.44, 0.4449],
+    [0.03125, 0.03, 0.0312], [0.09375, 0.09, 0.0938], [0.15625, 0.16, 0.1562], [0.21875, 0.22, 0.2188],
+    [0.28125, 0.28, 0.2812], [0.34375, 0.34, 0.3438], [0.71875, 0.72, 0.7188], [0.00015, 0.0, 0.0001],
+    [1.00005, 1.0, 1.0001], [0.99995, 1.0, 1.0], [4.9999e-05, 0.0, 0.0], [0.12345, 0.12, 0.1235],
+    [0.5358820043066892, 0.54, 0.5359], [0.36568891691258554, 0.37, 0.3657], [0.0, 0.0, 0.0], [1.0, 1.0, 1.0],
+  ];
+  for (const [x, two, four] of cases) {
+    assert.equal(pyRound(x, 2), two, `round(${x}, 2)`);
+    assert.equal(pyRound(x, 4), four, `round(${x}, 4)`);
+    assert.equal(roundProb(x), four);
+  }
 });
 
 test("dateFacts matches kev.api.date_facts", () => {
@@ -52,6 +67,13 @@ test("withDateFacts matches kev.api.with_date_facts", () => {
 
 test("validation mirrors the pydantic models", () => {
   const bad = [{}, { state: "x", questions: {} }, { state: "x", questions: { a: { type: "choice", instructions: "i", criteria: {} } } },
-    { state: "x", questions: { a: { type: "score", instructions: "i", criteria: ["one"] } } }, { state: "x", questions: { a: { type: "vote", instructions: "i" } } }];
+    { state: "x", questions: { a: { type: "score", instructions: "i", criteria: [] } } }, { state: "x", questions: { a: { type: "vote", instructions: "i" } } }];
   for (const b of bad) assert.throws(() => validate(b), ValidationError);
+  // instructions are optional and a score may have a single level (kev.api since the TypeSafe-contract update)
+  const ok = { state: "x", questions: { a: { type: "noul" }, b: { type: "score", criteria: ["only"] }, c: { type: "choice", criteria: { x: null } } } };
+  const { record, meta } = toRecord(validate(ok));
+  assert.deepEqual(record.questions.map((q) => q.instr), ["", "", ""]);
+  const answers = toAnswers([[0.25, 0.75], [1], [1]], meta);
+  assert.deepEqual(answers.b, { type: "score", score: 0, legend: { 0: "only" }, probabilities: { 0: 1 }, confidence: 1 });
+  assert.equal(scoreConfidence([1]), 1);
 });
