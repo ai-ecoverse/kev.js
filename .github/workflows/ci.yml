@@ -8,10 +8,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with: { submodules: true }
-      - uses: actions/setup-node@v5
-        with: { node-version: 22, cache: npm }
+      - uses: actions/setup-node@v7
+        with: { node-version: 24, cache: npm }
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build:lib
@@ -25,14 +25,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with: { node-version: 22, cache: npm }
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with: { node-version: 24, cache: npm }
       - run: npm ci
       # weights are cached per published manifest: a new checkpoint on Hugging Face is a new key
       - id: bundle
         run: echo "key=kev-0.8b-q8f32-$(curl -fsSL --retry 4 https://huggingface.co/ai-ecoverse/kev.js/resolve/main/kev-0.8b/manifest.json | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with: { path: public/models/kev-0.8b, key: "${{ steps.bundle.outputs.key }}" }
       - run: npm run fetch-model -- kev-0.8b q8f32
       # int8 results depend on the CPU's kernels (AVX-512 or not): record which one this runner has
@@ -41,7 +41,7 @@ jobs:
         env: { KEV_VARIANTS: q8f32 }
       - id: playwright
         run: echo "version=$(npx playwright --version | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with: { path: ~/.cache/ms-playwright, key: "playwright-${{ steps.playwright.outputs.version }}" }
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
@@ -49,5 +49,5 @@ jobs:
         # hand-written tickets (one a near-tie); WASM runs every fixture
         env: { KEV_REQUIRE_MODEL: "1", KEV_REQUIRE_WEBGPU: "1", KEV_WEBGPU_FIXTURES: "2" }
       - if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with: { name: playwright-results, path: test-results/, retention-days: 7 }
