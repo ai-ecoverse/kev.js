@@ -110,7 +110,7 @@ export function temperatureFor(run: string, manifestTemperature?: number): numbe
 type Past = Map<string, Tensor>;
 
 /** A state run once: its token count, caches, and the first text position of every question branch after it. */
-interface CachedState { len: number; past: Past; next: number }
+interface CachedState { len: number; past: Past; next: number; imageTokens: number }
 
 const halfToFloat = (() => {
   const f = new Float32Array(1), u = new Uint32Array(f.buffer);
@@ -222,7 +222,7 @@ export class Kev {
     for (const n of presentNames)
       past.set(n.endsWith(".key") || n.endsWith(".value") ? n.replace("present.", "past_key_values.") : n.replace("present.", "past."), out[n]);
     const last = typeof pos[0] === "number" ? (pos as number[]) : (pos as number[][]).flat();
-    return { len: ids.length, past, next: last.reduce((a, b) => Math.max(a, b), -1) + 1 };
+    return { len: ids.length, past, next: last.reduce((a, b) => Math.max(a, b), -1) + 1, imageTokens: 0 };
   }
 
   /** The vision tower on one image: [image tokens, hidden] rows for the <|image_pad|> tokens, and the patch grid. */
@@ -259,7 +259,7 @@ export class Kev {
     if (embeds.dims[0] !== n) throw new Error(`vision tower returned ${embeds.dims[0]} rows for ${n} image tokens`);
     this.timing.imageTokens = n;
     try {
-      return await this.runState(ids, pos, embeds);
+      return { ...await this.runState(ids, pos, embeds), imageTokens: n };
     } finally {
       (embeds as Tensor & { dispose?: () => void }).dispose?.();
     }
@@ -298,7 +298,7 @@ export class Kev {
       const t0 = performance.now();
       let st = this.cache.get(key);
       this.timing.cached = !!st;
-      if (st) { this.cache.delete(key); this.timing.preprocess = this.timing.vision = 0; }
+      if (st) { this.cache.delete(key); this.timing.preprocess = this.timing.vision = 0; this.timing.imageTokens = st.imageTokens; }
       else st = await this.newState(enc, image);
       const t1 = performance.now();
       this.timing.state = t1 - t0 - this.timing.preprocess - this.timing.vision;

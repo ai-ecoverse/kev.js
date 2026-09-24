@@ -138,6 +138,10 @@ test("image requests match PyTorch through the vision graph and the spliced deco
   assert.ok(res.usage.input_tokens > fx!.fixtures[0].image_tokens, "usage counts the image tokens");
   assert.equal((await kev.systemOne({ ...fx!.fixtures[0].request, image: image(fx!.fixtures[0]) })).usage.input_tokens, res.usage.input_tokens);
   assert.ok(kev.timing.cached, "the same image and text hit the state cache");
+  await kev.systemOne(fx!.fixtures[0].request);
+  const again = await kev.systemOne({ ...fx!.fixtures[0].request, image: image(fx!.fixtures[0]) });
+  assert.ok(kev.timing.cached);
+  assert.equal(again.usage.input_tokens, res.usage.input_tokens, "a cache hit after a text request still counts the image");
   console.log(`${variant}, ${n} images: vision ${(vision_ms / n).toFixed(0)} ms, decoder ${(decoder_ms / n).toFixed(0)} ms per image (onnxruntime-node CPU)`);
   const worst = Math.max(...Object.values((t.parity?.[variant] ?? {}) as Record<string, { max_abs_dp: number }>).map((s) => s.max_abs_dp), 0.05);
   for (const [s, parity] of bySet) {

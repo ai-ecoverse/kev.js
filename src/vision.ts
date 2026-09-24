@@ -68,14 +68,16 @@ function axis(inSize: number, outSize: number) {
   return out;
 }
 
-/** Bicubic resize of RGB planes, rounded and clamped to uint8 after each pass as torchvision does for uint8 images. */
-function resizeRGB(src: Float32Array[], h: number, w: number, H: number, W: number): Float32Array[] {
+/** Bicubic resize of an RGBA image to three RGB planes, rounded and clamped to uint8 after each pass as torchvision
+ * does for uint8 images. The horizontal pass reads the bytes directly, so nothing is allocated at the source's full
+ * size: a 48-megapixel photo would otherwise take ~576 MB of float planes before being cut down to max_pixels. */
+function resizeRGBA(data: ImageLike["data"], h: number, w: number, H: number, W: number): Float32Array[] {
   const ax = axis(w, W), ay = axis(h, H);
-  return src.map((plane) => {
+  return [0, 1, 2].map((ch) => {
     const tmp = new Float32Array(h * W);
     for (let y = 0; y < h; y++) for (let x = 0; x < W; x++) {
       const { start, w: k } = ax[x]; let s = 0;
-      for (let t = 0; t < k.length; t++) s += plane[y * w + start + t] * k[t];
+      for (let t = 0; t < k.length; t++) s += data[(y * w + start + t) * 4 + ch] * k[t];
       tmp[y * W + x] = Math.min(255, Math.max(0, Math.round(s)));
     }
     const out = new Float32Array(H * W);
@@ -105,8 +107,8 @@ export function preprocess(img: ImageLike, c: VisionConfig): Patches {
   const { width: w, height: h } = img;
   if (img.data.length !== w * h * 4) throw new RangeError(`image data has ${img.data.length} bytes, expected ${w} x ${h} x 4 (RGBA)`);
   const [H, W] = smartResize(h, w, c);
-  let planes: Float32Array[] = [0, 1, 2].map((ch) => { const p = new Float32Array(w * h); for (let i = 0; i < w * h; i++) p[i] = img.data[i * 4 + ch]; return p; });
-  if (H !== h || W !== w) planes = resizeRGB(planes, h, w, H, W);
+  const planes = H !== h || W !== w ? resizeRGBA(img.data, h, w, H, W)
+    : [0, 1, 2].map((ch) => { const p = new Float32Array(w * h); for (let i = 0; i < w * h; i++) p[i] = img.data[i * 4 + ch]; return p; });
   const ps = c.patch_size, m = c.merge_size, tps = c.temporal_patch_size;
   const gridH = H / ps, gridW = W / ps, dim = 3 * tps * ps * ps;
   const data = new Float32Array(gridH * gridW * dim);
