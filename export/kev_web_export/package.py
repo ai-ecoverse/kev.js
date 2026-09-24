@@ -3,13 +3,20 @@
     uv run python -m kev_web_export.package --build build/kev-0.8b --out ../dist/models/kev-0.8b \
         --variant q8=web-q8 --variant fp16=web-fp16 --fixtures ../fixtures/kev-0.8b.json
 
-Large files are hard-linked, not copied. With --fixtures, each variant's parity against the PyTorch reference is
+Large files are hard-linked, not copied. The manifest's `revision` is a digest of every file it names, and browsers
+key their cache by it, so a bundle rebuilt for the same checkpoint (a spliced decoder at the text graph's URL) is never
+served from stale cached bytes; `run` stays as provenance. Each variant records `max_positions`, the rows its rotary
+tables keep. With --fixtures, each variant's parity against the PyTorch reference is
 measured (CPU EP) and recorded in the manifest.
 
 --vision <kev_web_export.vision_onnx out dir> makes a bundle that takes images: the tower's browser graph goes under
 r-<sha>/vision/ and manifest.json gains `vision` (files, sizes, vision.json as `config`, and --vision-parity's report
-if given). Its variants must be spliced decoders (kev_web_export.splice), which take `image_embeds`."""
-import argparse, json, os, shutil
+if given). Its variants must be spliced decoders (kev_web_export.splice), which take `image_embeds`.
+
+    uv run python -m kev_web_export.package --update ../public/models/kev-0.8b
+
+adds `revision` and `max_positions` to an existing bundle's manifest without touching its files."""
+import argparse, hashlib, json, os, shutil, sys
 import onnx
 from .ort_runtime import OrtKev
 
@@ -29,6 +36,46 @@ def io_info(model_path):
     return [info(v, True) for v in m.graph.input], [info(v, False) for v in m.graph.output]
 
 
+def max_positions(model_path):
+    """How many positions the graph's rotary tables cover (postprocess.py --rope-positions): longer rows can't run."""
+    m = onnx.load(model_path, load_external_data=False)
+    return next(t.dims[0] for t in m.graph.initializer if t.name == "cos_cache")
+
+
+def bundle_files(manifest):
+    """Every file a manifest names, besides itself."""
+    files = set(manifest["files"].values())
+    for v in manifest["variants"].values(): files |= {v["model"], *v["data"]}
+    if manifest.get("vision"): files |= {manifest["vision"]["model"], *manifest["vision"]["data"]}
+    return files
+
+
+def content_revision(out, files):
+    """A digest of the files' contents, which clients key their cache by."""
+    h = hashlib.sha256()
+    for f in sorted(files):
+        d = hashlib.sha256()
+        with open(f"{out}/{f}", "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 24), b""): d.update(chunk)
+        h.update(f"{f}\0{d.hexdigest()}\n".encode())
+    return h.hexdigest()[:16]
+
+
+def with_revision(out, manifest):
+    """The manifest with max_positions per variant and `revision` right after `run`."""
+    for v in manifest["variants"].values(): v["max_positions"] = max_positions(f"{out}/{v['model']}")
+    rev = content_revision(out, bundle_files(manifest))
+    items = [(k, v) for k, v in manifest.items() if k != "revision"]
+    i = next(n for n, (k, _) in enumerate(items) if k == "run") + 1
+    return dict(items[:i] + [("revision", rev)] + items[i:])
+
+
+def update(out):
+    manifest = with_revision(out, json.load(open(f"{out}/manifest.json")))
+    json.dump(manifest, open(f"{out}/manifest.json", "w"), indent=2)
+    print(f"{out}/manifest.json: revision {manifest['revision']}, max_positions {({k: v['max_positions'] for k, v in manifest['variants'].items()})}")
+
+
 def link(src, dst):
     if os.path.exists(dst): os.remove(dst)
     try: os.link(src, dst)
@@ -36,6 +83,7 @@ def link(src, dst):
 
 
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "--update": return update(sys.argv[2])
     ap = argparse.ArgumentParser()
     ap.add_argument("--build", required=True, help="merge output dir (kev.json, head.safetensors, tokenizer/, variant dirs)")
     ap.add_argument("--out", required=True)
@@ -118,6 +166,7 @@ def main():
     manifest = {"name": os.path.basename(os.path.normpath(a.out)), **{k: kev[k] for k in keys if k in kev},
                 "files": {"head": f"{r}/head.safetensors", "tokenizer": f"{r}/tokenizer.json", "tokenizer_config": f"{r}/tokenizer_config.json"},
                 "variants": variants, **({"vision": vision} if vision else {})}
+    manifest = with_revision(a.out, manifest)
     json.dump(manifest, open(f"{a.out}/manifest.json", "w"), indent=2)
     print(f"{a.out}/manifest.json: {', '.join(f'{k} {v['bytes'] / 1e6:.0f} MB' for k, v in variants.items())}")
 

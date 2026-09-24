@@ -15,6 +15,7 @@ import { Tokenizer } from "@huggingface/tokenizers";
 import { root } from "./fixtures.ts";
 import { MEAN_ABS_DP, Parity } from "./parity.ts";
 import { decodePng } from "./png.ts";
+import { headFile } from "./synthetic.ts";
 
 interface VisionFixture {
   set: string; id: string; image: string; size: [number, number]; request: SystemOneRequest; labels: number[];
@@ -82,6 +83,30 @@ test("preprocess reproduces Qwen's pixel_values", { skip: fx ? false : `no fixtu
   }
   console.log(`${n} images: mean |pixel difference| per value at most ${worstMean.toExponential(2)} (one uint8 step is ${(2 / 255).toExponential(2)})`);
   assert.ok(worstMean < 2e-3);
+});
+
+test("a request past the rotary tables is rejected before inference, image positions included", async () => {
+  const fail = { run: async () => { throw new Error("no session may run"); }, release: async () => {} };
+  const manifest = {
+    name: "kev-test", run: "jaredpalmer/kev-test@abc", hidden_size: 3, special: {} as KevManifest["special"],
+    variants: { v: { model: "", data: [], bytes: 0, io_dtype: "float32", inputs: [{ name: "image_embeds", type: "float32", shape: [] }], outputs: [], max_positions: 8192 } },
+    vision: { model: "", data: [], bytes: 0, config: VISION },
+  } as unknown as KevManifest;
+  const ortStub = { Tensor: class { constructor(readonly type: string, readonly data: unknown, readonly dims: number[]) {} } } as unknown as OrtModule;
+  const kev = new Kev({ ort: ortStub, session: fail as never, vision: fail as never, head: PointerHead.fromSafetensors(headFile().buffer as ArrayBuffer),
+    tokenizer: null as never, manifest, variant: "v" });
+  // kev.serve's limits: state + one question <= 8,192 tokens, so a text request always fits the tables
+  const S = 8100, B = 92;
+  const enc = { state: new Array(S).fill(7), branches: [{ ids: new Array(B).fill(7), pos: Array.from({ length: B }, (_, i) => S + i), decide: 0, opts: [1] }], stateTruncated: false, tokens: S + B };
+  assert.equal(kev.lastPosition(enc), 8191);
+  // a 768 x 768 image is 576 tokens but moves mRoPE on by 26 (vision_start, 24 merged rows, vision_end), past the tables
+  const square = { width: 768, height: 768, data: new Uint8ClampedArray(768 * 768 * 4) };
+  assert.equal(kev.lastPosition(enc, square), 8191 + 26);
+  await assert.rejects(kev.probsEncoded(enc, undefined, square), (e: Error) => e instanceof RangeError && /needs 8218 positions; this graph's rotary tables cover 8192/.test(e.message));
+  // a strip at the pixel cap (64 x 9216, 2 x 288 merged patches) moves it on by 290
+  const strip = { width: 9216, height: 64, data: new Uint8ClampedArray(9216 * 64 * 4) };
+  assert.equal(kev.lastPosition(enc, strip) - kev.lastPosition(enc), 290);
+  await assert.rejects(kev.probsEncoded(enc), /no session may run/, "a text request that fits goes on to the session");
 });
 
 const dir = process.env.KEV_VISION_DIR ?? `${root}/public/models/${name}`;

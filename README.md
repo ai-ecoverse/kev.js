@@ -60,7 +60,15 @@ here is pinned to a commit. `kev_web_export.pin` resolves `jaredpalmer/kev-4b` t
 merge, the fixtures and the reference sets record it, and `package.py` refuses to combine fixtures and weights
 from different commits. Each bundle's `manifest.json` names its revision (`run`), and its files live under
 `r-<sha>/`. Publishing a new checkpoint therefore never overwrites a file an older manifest points at: the switch is
-the single commit that replaces `manifest.json`, and browsers key their cache by that revision.
+the single commit that replaces `manifest.json`. Browsers key their cache by the manifest's `revision`, a digest of
+every file it names, so a bundle rebuilt for the same checkpoint (a new exporter, or the spliced vision decoder at the
+text graph's URL) is never served from stale cached bytes; manifests without one fall back to `run`. Other revisions
+are evicted before the download, so a quota that fits one bundle but not two still ends up with the new one. Each
+variant records `max_positions`, the rows its rotary tables keep (8,192; the fp32 reference keeps 262,144), and a
+request that would pass them fails with a `RangeError` before the session runs. Text requests within `kev.serve`'s
+limits (state plus one question at most 8,192 tokens) always fit; an image moves the positions on by its larger side
+in merged patches plus 2 (26 for 768 × 768, up to 290 for a 64 × 9216 strip), so a near-limit state with an image can
+be rejected. `package.py --update <bundle>` adds both fields to an existing manifest without touching its files.
 
 The published bundles were exported from the night-2 LoRA (`kev-0.8b@2256796`, `kev-4b@4bc64c6`, `kev-9b@442e597`).
 Hub `main` later added the fitted temperature to `head.pt` without changing the adapter. The runtime applies those

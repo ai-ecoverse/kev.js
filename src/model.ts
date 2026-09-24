@@ -7,7 +7,7 @@ import { Tokenizer } from "@huggingface/tokenizers";
 import { pyJsonDumps, toAnswers, toRecord, validate, withDateFacts, type Answer, type DecisionRecord, type SystemOneRequest, type SystemOneResponse } from "./api.ts";
 import { encode, type Encoding, type EncodeOptions, type SpecialTokens } from "./encode.ts";
 import { PointerHead } from "./head.ts";
-import { imageKey, preprocess, ropePositions, visionInputs, type ImageLike, type VisionConfig } from "./vision.ts";
+import { imageKey, preprocess, ropePositions, smartResize, visionInputs, type ImageLike, type VisionConfig } from "./vision.ts";
 
 /** The subset of the onnxruntime-web / onnxruntime-node module the runtime uses (both satisfy it). */
 export interface OrtModule {
@@ -34,6 +34,8 @@ export interface VariantManifest {
   outputs: IOInfo[];
   /** parity against the fp32 PyTorch model on the bundled fixtures */
   parity?: { max_abs_dp: number; argmax_flips: number; questions: number };
+  /** rows of the graph's rotary tables (8,192 after postprocess): no position may reach it */
+  max_positions?: number;
 }
 
 /** The vision tower of a bundle that takes images (kev_web_export.vision_onnx + package --vision). Its decoder
@@ -53,7 +55,10 @@ export interface Timing { preprocess: number; vision: number; state: number; bra
 
 export interface KevManifest {
   name: string;
+  /** the checkpoint the weights come from, repo@commit */
   run: string;
+  /** digest of the bundle's files, which the loader keys Cache Storage by; older manifests have none (then `run`) */
+  revision?: string;
   base: string;
   hidden_size: number;
   head_dim: number;
@@ -249,22 +254,45 @@ export class Kev {
   private async newState(enc: Encoding, image?: ImageLike): Promise<CachedState> {
     this.timing.preprocess = this.timing.vision = 0; this.timing.imageTokens = 0;
     if (!image) return this.runState(enc.state, enc.state.map((_, i) => i));
-    const c = this.manifest.vision!.config;
-    const { embeds, gridH, gridW } = await this.imageEmbeds(image);
-    const n = embeds.dims[0];
-    const ids = [enc.state[0], c.vision_start, ...new Array(n).fill(c.image_token), c.vision_end, ...enc.state.slice(1)];
+    const { ids, pos, n } = this.imageLayout(enc, image);
+    const { embeds } = await this.imageEmbeds(image);
+    if (embeds.dims[0] !== n) throw new Error(`vision tower returned ${embeds.dims[0]} rows for ${n} image tokens`);
     this.timing.imageTokens = n;
     try {
-      return await this.runState(ids, ropePositions(ids, gridH, gridW, c.image_token, c.merge_size), embeds);
+      return await this.runState(ids, pos, embeds);
     } finally {
       (embeds as Tensor & { dispose?: () => void }).dispose?.();
     }
+  }
+
+  /** The state's token ids and mRoPE positions with an image in front, from the image's size alone (Qwen's resize
+   * fixes the patch grid, so this needs no vision pass). */
+  private imageLayout(enc: Encoding, image: ImageLike): { ids: number[]; pos: number[][]; n: number } {
+    const c = this.manifest.vision!.config;
+    const [H, W] = smartResize(image.height, image.width, c);
+    const gridH = H / c.patch_size, gridW = W / c.patch_size, n = (gridH * gridW) / (c.merge_size * c.merge_size);
+    const ids = [enc.state[0], c.vision_start, ...new Array(n).fill(c.image_token), c.vision_end, ...enc.state.slice(1)];
+    return { ids, pos: ropePositions(ids, gridH, gridW, c.image_token, c.merge_size), n };
+  }
+
+  /** The largest position a request uses: the state's (after an image, mRoPE advances by the image's larger side in
+   * merged patches, not by its token count) or its longest question's. */
+  lastPosition(enc: Encoding, image?: ImageLike): number {
+    let next = enc.state.length;
+    if (image) next = this.imageLayout(enc, image).pos.flat().reduce((a, b) => Math.max(a, b), -1) + 1;
+    let last = next - 1;
+    for (const b of enc.branches) for (const p of b.pos) last = Math.max(last, p - enc.state.length + next);
+    return last;
   }
 
   /** Per-question probabilities for an encoded request, with an optional image in front of the state. onQuestion
    * fires as each question finishes. */
   probsEncoded(enc: Encoding, onQuestion?: (index: number, probs: number[]) => void, image?: ImageLike): Promise<number[][]> {
     if (image && !this.vision) throw new Error(this.manifest.vision ? "loaded without the vision tower (vision: false)" : `${this.manifest.name} takes no images; load a vision bundle`);
+    const limit = this.v.max_positions, last = limit ? this.lastPosition(enc, image) : 0;
+    if (limit && last >= limit) {
+      return Promise.reject(new RangeError(`the request needs ${last + 1} positions; this graph's rotary tables cover ${limit}: shorten the state or the questions${image ? ", or use a smaller image" : ""}`));
+    }
     return this.serial(async () => {
       const key = (image ? `${imageKey(image)}|` : "") + enc.state.join(",");
       const t0 = performance.now();

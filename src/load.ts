@@ -58,8 +58,8 @@ async function readWithProgress(res: Response, file: string, onProgress?: (p: Pr
   return out;
 }
 
-/** The Cache Storage key for one file of one model revision. Weights are republished under the same URLs with the
- * same sizes, so the key carries the revision: a new checkpoint never reads an old one's cached bytes. */
+/** The Cache Storage key for one file of one bundle revision. Weights are republished under the same URLs with the
+ * same sizes, so the key carries the revision: a new or rebuilt bundle never reads an old one's cached bytes. */
 const cacheKey = (url: string, rev?: string) => (rev ? `${url}${url.includes("?") ? "&" : "?"}kev-rev=${encodeURIComponent(rev)}` : url);
 
 export async function fetchFile(url: string, o: { cacheName?: string | null; onProgress?: (p: Progress) => void; file?: string; bytes?: number; rev?: string } = {}): Promise<Uint8Array> {
@@ -122,7 +122,7 @@ async function readLocal(read: ReadModelFile, file: string, o: { onProgress?: (p
 
 const join = (base: string, path: string) => `${base.replace(/\/$/, "")}/${path}`;
 
-/** Delete this model's cached files from other revisions: a superseded checkpoint is gigabytes of quota. */
+/** Delete this model's cached files from other revisions: a superseded bundle is gigabytes of quota. */
 async function dropOtherRevisions(baseUrl: string, rev: string, cacheName?: string | null) {
   if (cacheName === null || typeof caches === "undefined") return;
   const cache = await caches.open(cacheName ?? "kev-web-v1");
@@ -158,11 +158,16 @@ export async function loadKev(source: ModelSource, o: LoadOptions): Promise<Kev>
   if (!v) throw new Error(`unknown variant ${variant}; have ${Object.keys(manifest.variants).join(", ")}`);
   const tower = o.vision === false ? undefined : manifest.vision;
   const sizes = { ...v.sizes, ...tower?.sizes };
+  // the content digest when the manifest has one: a bundle rebuilt for the same checkpoint (a spliced decoder at the
+  // text graph's URL) must not be read from the old bytes, which `run` alone would allow
+  const rev = manifest.revision ?? manifest.run;
+  // before fetching: a quota that fits one bundle but not two would otherwise refuse the new files and keep the old
+  if (baseUrl !== null) await dropOtherRevisions(baseUrl, rev, o.cacheName);
   o.onPhase?.("download");
   // announce every file up front so the total does not grow as downloads start
   for (const [p, bytes] of Object.entries(sizes)) o.onProgress?.({ file: p, loaded: 0, total: bytes });
   const get = (p: string) => read ? readLocal(read, p, { onProgress: o.onProgress, bytes: sizes[p] })
-    : fetchFile(join(baseUrl!, p), { cacheName: o.cacheName, onProgress: o.onProgress, file: p, bytes: sizes[p], rev: manifest.run });
+    : fetchFile(join(baseUrl!, p), { cacheName: o.cacheName, onProgress: o.onProgress, file: p, bytes: sizes[p], rev });
   const [tokJson, tokCfg] = (await Promise.all([get(manifest.files.tokenizer), get(manifest.files.tokenizer_config)])).map(decode);
   const towerFiles = tower ? [tower.model, ...tower.data] : [];
   const [head, graph, ...rest] = await pool([manifest.files.head, v.model, ...v.data, ...towerFiles].map((p) => () => get(p)), o.concurrency ?? 2);
@@ -184,7 +189,6 @@ export async function loadKev(source: ModelSource, o: LoadOptions): Promise<Kev>
     externalData: tower.data.map((p, i) => ({ path: p.split("/").pop()!, data: towerData[i + 1] })),
     ...o.sessionOptions,
   });
-  if (baseUrl !== null) await dropOtherRevisions(baseUrl, manifest.run, o.cacheName);
   o.onPhase?.("ready");
   return new Kev({ ort: o.ort, session, head: PointerHead.fromSafetensors(head.slice().buffer), tokenizer, manifest, variant, options: o, vision });
 }

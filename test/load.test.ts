@@ -103,3 +103,54 @@ test("the parity rule catches a runtime-wide shift through the mean, over enough
   for (let i = 6; i < 20; i++) p.add(`q${i}`, [0.8, 0.2], [0.77, 0.23]);
   assert.deepEqual(p.violations({ max: 0.19, mean: 0.02 }).map((v) => v.split(" ")[0]), ["mean"]);
 });
+
+/** An in-memory Cache Storage (the parts loadKev uses) that logs deletions into `events`. */
+function memoryCaches(events: string[]) {
+  const stores = new Map<string, Map<string, Response>>();
+  const cache = (m: Map<string, Response>) => ({
+    match: async (key: string) => m.get(key)?.clone(),
+    put: async (key: string, res: Response) => { m.set(key, res); },
+    delete: async (req: Request | string) => { const k = typeof req === "string" ? req : req.url; events.push(`evict ${k}`); return m.delete(k); },
+    keys: async () => [...m.keys()].map((url) => ({ url }) as Request),
+  });
+  return { open: async (name: string) => cache(stores.get(name) ?? stores.set(name, new Map()).get(name)!) } as unknown as CacheStorage;
+}
+
+test("a bundle rebuilt for the same checkpoint is fetched again, and the old copy is evicted before the download", async () => {
+  const base = "https://models.test/kev-test";
+  const files = await bundle();
+  const manifest = JSON.parse(new TextDecoder().decode(files.get("manifest.json"))) as KevManifest;
+  const serve = (m: KevManifest, graph: string) => {
+    files.set("manifest.json", new TextEncoder().encode(JSON.stringify(m)));
+    files.set("r-abc/v/model.onnx", new TextEncoder().encode(graph));
+  };
+  const events: string[] = [];
+  const realFetch = globalThis.fetch, realCaches = (globalThis as { caches?: CacheStorage }).caches;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const path = String(input).slice(base.length + 1);
+    events.push(`fetch ${path}`);
+    const b = files.get(path);
+    return b ? new Response(b as BodyInit) : new Response(null, { status: 404 });
+  }) as typeof fetch;
+  (globalThis as { caches?: CacheStorage }).caches = memoryCaches(events);
+  try {
+    // same checkpoint (run), same file sizes, different bytes: only the content revision tells them apart
+    serve({ ...manifest, revision: "aaaa" }, "graph");
+    const first = stubOrt();
+    await loadKev(base, { ort: first.ort, variant: "v", executionProviders: ["cpu"] });
+    assert.equal(new TextDecoder().decode(first.created[0].graph), "graph");
+    events.length = 0;
+    serve({ ...manifest, revision: "bbbb" }, "GRAPH");
+    const second = stubOrt();
+    await loadKev(base, { ort: second.ort, variant: "v", executionProviders: ["cpu"] });
+    assert.equal(new TextDecoder().decode(second.created[0].graph), "GRAPH", "the rebuilt graph, not the cached one");
+    const evictions = events.flatMap((e, i) => (e.startsWith("evict") ? [i] : []));
+    const firstFileFetch = events.findIndex((e) => e.startsWith("fetch r-abc/"));
+    assert.equal(evictions.length, 6, "every file of the old revision is evicted");
+    assert.ok(evictions.every((i) => i < firstFileFetch), `evicted before the download: ${events.join(", ")}`);
+    assert.ok(events.filter((e) => e.startsWith("evict")).every((e) => e.includes("kev-rev=aaaa")));
+  } finally {
+    globalThis.fetch = realFetch;
+    (globalThis as { caches?: CacheStorage }).caches = realCaches;
+  }
+});

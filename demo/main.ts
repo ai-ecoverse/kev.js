@@ -84,7 +84,7 @@ $("image-box").ondrop = (e) => {
 /** Models whose weights finished downloading here before, with the revision they were: a republished checkpoint
  * is a new download even though the URLs are the same. The loader still checks every file's size. */
 const cacheKey = (model: string, variant: string) => `cached:${model}/${variant}`;
-const revisions = new Map<string, string>();   // model -> manifest.run
+const revisions = new Map<string, string>();   // model -> manifest.revision (content digest), else manifest.run
 const isCached = (model: string, variant: string) => !!revisions.get(model) && store.get(cacheKey(model, variant)) === revisions.get(model);
 
 async function refreshVariants() {
@@ -94,7 +94,7 @@ async function refreshVariants() {
   // the dev server answers a missing file with index.html
   const manifest = res.ok ? ((await res.json().catch(() => null)) as KevManifest | null) : null;
   if (!manifest) { sel.innerHTML = ""; sel.add(new Option("unavailable", "")); status(`${model} is not published yet.`, "err"); return; }
-  revisions.set(model, manifest.run);
+  revisions.set(model, manifest.revision ?? manifest.run);
   for (const [name, v] of Object.entries(manifest.variants)) {
     if (name === "fp32") continue;   // fp32 is for Node parity tests; too large for a tab
     const cached = isCached(model, name) ? ", cached" : "";
