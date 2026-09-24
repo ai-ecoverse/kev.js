@@ -49,7 +49,9 @@ def main():
     kev = {
         "run": a.run, "base": meta["base"], "base_revision": meta.get("base_revision"), "lora": meta.get("lora"),
         "hidden_size": m.lm.config.hidden_size, "head_dim": meta.get("head_dim", 256),
-        "temperature": float(meta.get("temperature", 1.0)),
+        # absent from head.pt before the fitted temperature was saved: leave it out so kev.js falls back to the
+        # night-2 table (kev.evaluate.load's rule) instead of serving raw logits
+        **({"temperature": float(meta["temperature"])} if "temperature" in meta else {}),
         "special": {name: tok.convert_tokens_to_ids(t) for name, t in zip(["state", "q", "opt", "opt_end", "decide"], SPECIAL)},
         "max_state": MAX_STATE, "max_branch": MAX_BRANCH, "pad_id": tok.pad_token_id if tok.pad_token_id is not None else 0,
     }

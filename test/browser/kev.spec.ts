@@ -1,6 +1,7 @@
 // Browser tests: the loader against the real OPFS, and the published model loaded from OPFS on onnxruntime-web.
 // KEV_REQUIRE_MODEL=1 turns a missing bundle into a failure, KEV_REQUIRE_WEBGPU=1 a missing WebGPU adapter (CI sets
 // what it provides), so a green run means the case ran.
+import { writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -73,3 +74,21 @@ for (const ep of ["wasm", "webgpu"] as const) {
     expect(r.caches, "nothing is written to Cache Storage").toEqual([]);
   });
 }
+
+// Image requests on a vision bundle (public/models/<KEV_VISION_MODEL>, default kev-4b-vision, built locally: README,
+// Images) against fixtures/<model>.json. KEV_VISION_EP picks the backend (default webgpu), KEV_VISION_REPORT saves
+// the per-set report as JSON.
+test("a Kev vision bundle matches the PyTorch image fixtures", async ({ page }) => {
+  test.setTimeout(60 * 60_000);
+  const ep = process.env.KEV_VISION_EP ?? "webgpu";
+  const r = await run(page, "vision", { ep, model: process.env.KEV_VISION_MODEL ?? "kev-4b-vision", variant: process.env.KEV_VISION_VARIANT ?? "q8f32", limit: Number(process.env.KEV_BROWSER_FIXTURES) || undefined });
+  if (r.skip) test.skip(true, String(r.skip));
+  for (const [s, v] of Object.entries(r.sets as Record<string, Record<string, unknown>>))
+    console.log(`[${ep}${r.adapter ? `, ${r.adapter}` : ""}] ${s}: ${JSON.stringify(v)}`);
+  if (process.env.KEV_VISION_REPORT) writeFileSync(process.env.KEV_VISION_REPORT, JSON.stringify(r, null, 1));
+  expect(r.fixtureRun, "fixtures and weights come from the same checkpoint").toBe(r.run);
+  for (const v of Object.values(r.sets as Record<string, { violations: string[]; max_mean_pixel_diff: number }>)) {
+    expect(v.violations, "parity with the PyTorch reference (test/parity.ts)").toEqual([]);
+    expect(v.max_mean_pixel_diff, "the browser decodes and resizes the images as PIL and Qwen's processor do").toBeLessThan(2e-3);
+  }
+});

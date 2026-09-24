@@ -16,6 +16,13 @@ const fixtures: Plugin = {
       res.setHeader("content-type", "application/json");
       createReadStream(file).pipe(res);
     });
+    // the eval images the vision fixtures refer to
+    server.middlewares.use("/eval/", (req, res, next) => {
+      const path = decodeURIComponent(req.url ?? "").split("?")[0].replace(/^\/+/, "");
+      if (!/^[\w.-]+\/images\/[\w.-]+\.(png|jpg)$/.test(path) || !existsSync(`${repo}/eval/${path}`)) return next();
+      res.setHeader("content-type", path.endsWith(".png") ? "image/png" : "image/jpeg");
+      createReadStream(`${repo}/eval/${path}`).pipe(res);
+    });
   },
 };
 
@@ -24,7 +31,7 @@ export default defineConfig({
   publicDir: `${repo}/public`,
   appType: "mpa",   // a missing model file is a 404, not index.html
   plugins: [fixtures],
-  server: { headers: isolation, host: "127.0.0.1", port: 5174, strictPort: true },
+  server: { headers: isolation, host: "127.0.0.1", port: Number(process.env.KEV_HARNESS_PORT ?? 5174), strictPort: true },
   optimizeDeps: { exclude: ["onnxruntime-web"] },
   worker: { format: "es" },
 });

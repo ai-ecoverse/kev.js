@@ -60,12 +60,108 @@ here is pinned to a commit. `kev_web_export.pin` resolves `jaredpalmer/kev-4b` t
 merge, the fixtures and the reference sets record it, and `package.py` refuses to combine fixtures and weights
 from different commits. Each bundle's `manifest.json` names its revision (`run`), and its files live under
 `r-<sha>/`. Publishing a new checkpoint therefore never overwrites a file an older manifest points at: the switch is
-the single commit that replaces `manifest.json`, and browsers key their cache by that revision.
+the single commit that replaces `manifest.json`. Browsers key their cache by the manifest's `revision`, a digest of
+every file it names, so a bundle rebuilt for the same checkpoint (a new exporter, or the spliced vision decoder at the
+text graph's URL) is never served from stale cached bytes; manifests without one fall back to `run`. Other revisions
+are evicted before the download, so a quota that fits one bundle but not two still ends up with the new one. Each
+variant records `max_positions`, the rows its rotary tables keep (8,192; the fp32 reference keeps 262,144), and a
+request that would pass them fails with a `RangeError` before the session runs. Text requests within `kev.serve`'s
+limits (state plus one question at most 8,192 tokens) always fit; an image moves the positions on by its larger side
+in merged patches plus 2 (26 for 768 × 768, up to 290 for a 64 × 9216 strip), so a near-limit state with an image can
+be rejected. `package.py --update <bundle>` adds both fields to an existing manifest without touching its files.
 
 The published bundles were exported from the night-2 LoRA (`kev-0.8b@2256796`, `kev-4b@4bc64c6`, `kev-9b@442e597`).
 Hub `main` later added the fitted temperature to `head.pt` without changing the adapter. The runtime applies those
 temperatures for those revisions even when an older `manifest.json` does not yet name `temperature`; re-running
 `build_model.sh` writes it into the manifest from `head.pt`.
+
+## Images
+
+Kev was fine-tuned on text only, but its Qwen3.5 bases are vision-language models, and the LoRA leaves the vision
+tower and its merger alone. A vision bundle (`kev-4b-vision`, `kev-0.8b-vision`) adds that stock tower, unchanged and
+untrained, in front of the same decoder. A request may then carry an image as RGBA pixels; it goes in front of the
+state, as Qwen's chat template places it. Without an image the request is exactly the text request.
+
+```ts
+const kev = await loadKev(".../kev-4b-vision", { ort, variant: "q8f32" });
+const bitmap = await createImageBitmap(file, { colorSpaceConversion: "none", premultiplyAlpha: "none" });
+const ctx = new OffscreenCanvas(bitmap.width, bitmap.height).getContext("2d")!;
+ctx.drawImage(bitmap, 0, 0);
+const res = await kev.systemOne({
+  state: "A screenshot of an online shop.",
+  image: ctx.getImageData(0, 0, bitmap.width, bitmap.height),   // any { width, height, data: RGBA bytes }
+  questions: { stock: { type: "noul", instructions: "Is the coffee grinder in stock?" } },
+});
+kev.timing;   // { preprocess, vision, state, branches, imageTokens, cached } of the last request, in ms
+```
+
+The vision bundles are built locally and are not published yet. The demo lists `kev-4b-vision` and has image presets,
+a file picker and drag and drop.
+
+Two eval sets measure it, each in four conditions: the image, a text caption holding the same facts (the text upper
+bound), the context alone, and another image of the same family. [vision-v1](eval/vision-v1) (41 images, 106
+questions) has easy generated images and public-domain photos. [vision-v2](eval/vision-v2) (44 images, 128
+questions) has full screens downscaled to the pixel cap, dense charts, counting and small print. Accuracy with a 95%
+interval from resampling images; PyTorch fp32 on MPS; raw logits.
+
+| Model | Set | Image | Caption | Context only | Other image | Chance |
+|---|---|---|---|---|---|---|
+| Kev-4B `kev-4b@4bc64c6` | v1 | 0.981 [0.954, 1.000] | 1.000 | 0.425 | 0.208 | 0.360 |
+| | v2 | 0.875 [0.822, 0.927] | 0.883 | 0.320 | 0.234 | 0.320 |
+| Kev-0.8B `kev-0.8b@2256796` | v1 | 0.906 [0.844, 0.955] | 0.915 | 0.330 | 0.245 | 0.360 |
+| | v2 | 0.672 [0.583, 0.756] | 0.742 | 0.320 | 0.242 | 0.320 |
+
+Kev-4B reads an image about as well as the caption that describes it. Swapping in another image makes the answers
+worse than chance, so they follow the image. What fails is counting: 13 of Kev-4B's 16 v2 errors are counting
+questions. Each eval set's README breaks the results down by type and family.
+
+In the browser (Chrome, WebGPU on an Apple M4 Max, `q8f32` decoder and the tower with fp16 weights computing in fp32),
+against the fp32 PyTorch reference (`fixtures/<model>-vision.json`, raw logits, CPU):
+
+| Model | Set | Accuracy, browser / PyTorch | Mean / max \|Δp\| | Answers changed (reference margin) | Vision / decoder, median |
+|---|---|---|---|---|---|
+| Kev-4B | v1 | 0.972 / 0.981 | 0.0009 / 0.035 | 1 / 106 (0.007) | 142 / 574 ms |
+| | v2 | 0.875 / 0.875 | 0.0036 / 0.059 | 0 / 128 | 549 / 1083 ms |
+| Kev-0.8B | v1 | 0.906 / 0.906 | 0.0022 / 0.020 | 0 / 106 | 49 / 150 ms |
+| | v2 | 0.664 / 0.672 | 0.0043 / 0.025 | 1 / 128 (0.006) | 217 / 273 ms |
+
+v1 images become 108-550 image tokens (median 196) and v2 images 400-560 (median 540). The decoder time covers the
+state with the image tokens plus one to four questions. Both answers that changed were near-ties in the reference. The same
+bundles on onnxruntime CPU (`kev_web_export.vision_parity`): Kev-4B v1 0.0024 / 0.075 with 2 near-tie changes
+(margins 0.007 and 0.044), v2 0.0053 / 0.142 with none; Kev-0.8B v1 0.0035 / 0.043, v2 0.0081 / 0.065 with 2 near-tie
+changes (0.021, 0.006). The fp32 ONNX graphs match PyTorch to 1.4e-4 (4B v1), 1.9e-4 (4B v2), 3.5e-5 and 1.1e-4
+(0.8B).
+
+The text path does not move. The decoder of a vision bundle is the published `q8f32` graph with one extra input,
+`image_embeds`, spliced in (`kev_web_export.splice`). It uses the same weight files, hard-linked, and a text request
+feeds it one zero row that no token selects. The text fixtures give the published figures on both bundles: 4B max
+\|Δp\| 0.0625 with 1 near-tie change out of 29, 0.8B 0.0967 with none out of 49. On the fp32 graphs, spliced and
+unspliced both match PyTorch to 1.3e-4 (4B).
+
+The tower adds 668 MB to Kev-4B's download and 202 MB to Kev-0.8B's. Images are resized the way Qwen's processor does
+it, to multiples of 32 pixels and at most 768 × 768 = 589,824 pixels (`max_pixels`, about 576 image tokens); the JS
+port matches Qwen's `pixel_values` to a mean difference of 2.3e-5 per value (one uint8 step is 7.8e-3). One image per request. Images need a float32-io variant
+(`q8f32`), because the tower's output is fed to the decoder as is. Nothing was trained for this, so images carry
+Kev's text calibration: Kev-4B's v1 Brier is 0.021, and 0.173 on v2.
+
+Build a vision bundle from a merged build directory (`build_model.sh` output) and its published `q8f32` graph:
+
+```bash
+cd export
+uv run --group vision python -m kev_web_export.vision_onnx --run jaredpalmer/kev-4b@<sha> --out build/kev-4b-vision
+uv run python -m kev_web_export.splice --src ../public/models/kev-4b/r-<sha>/q8f32 --out build/kev-4b/q8f32-vision
+uv run --group vision python -m kev_web_export.vision_fixtures --run jaredpalmer/kev-4b@<sha> \
+    --set ../eval/vision-v1 --set ../eval/vision-v2 --out ../fixtures/kev-4b-vision.json        # CPU, about an hour for 4B
+uv run --group vision python -m kev_web_export.vision_parity --decoder build/kev-4b/q8f32-vision/model.onnx \
+    --vision build/kev-4b-vision/web/model.onnx --build build/kev-4b --vision-json build/kev-4b-vision/vision.json \
+    --fixtures ../fixtures/kev-4b-vision.json --text-fixtures ../fixtures/kev-4b.json --out build/kev-4b-vision/parity-q8f32.json
+uv run python -m kev_web_export.package --build build/kev-4b --out ../public/models/kev-4b-vision \
+    --variant q8f32=q8f32-vision --fixtures ../fixtures/kev-4b.json \
+    --vision build/kev-4b-vision --vision-parity q8f32=build/kev-4b-vision/parity-q8f32.json
+```
+
+`kev_web_export.vision_eval` gives the PyTorch four-condition tables above (`--set ../eval/vision-v2 --out
+../eval/vision-v2/results/kev-4b`).
 
 ## How It Works
 
@@ -176,6 +272,16 @@ published manifest) and runs the Node and browser suites against it. Its runners
 SwiftShader (a CPU Vulkan): that checks the WebGPU kernels' results, not GPU speed, at about 150 s per fixture, so CI
 runs two (`KEV_WEBGPU_FIXTURES`). `KEV_WEBGPU_SWIFTSHADER=1` forces that adapter locally.
 
+Image requests (`test/vision.test.ts`, and the browser case `a Kev vision bundle matches the PyTorch image fixtures`)
+check the preprocessing and mRoPE positions without weights. With a vision bundle in `public/models/kev-4b-vision`
+(`KEV_VISION_MODEL=kev-0.8b-vision` for the other) they run every eval image through the tower and the spliced
+decoder and compare per set with `fixtures/<model>-vision.json`, under the text rule's bounds against the
+manifest's `vision.parity`. Node has no JPEG decoder here, so it skips v1's two JPEG photos; the browser decodes all
+85 images itself. `KEV_VISION_EP=wasm` runs the browser case on WASM, and `KEV_VISION_REPORT=<file>` saves its per-set
+report. On macOS, Playwright's headless Chromium reports a Metal adapter but stalls for minutes on Kev-4B's first
+pass, so the WebGPU numbers above come from `KEV_BROWSER_CHANNEL=chrome` (the installed Chrome).
+`KEV_HARNESS_PORT` moves the harness off 5174 when another dev server holds that port.
+
 `scripts/cdp.mjs` drives a page in a Chrome started with `--remote-debugging-port=9222`, for checking the demo in a
 real browser: `node scripts/cdp.mjs '<expression>'` evaluates in the tab (`MATCH=` picks it by URL), and
 `node scripts/cdp.mjs --shot out.png` screenshots it.
@@ -184,6 +290,9 @@ real browser: `node scripts/cdp.mjs '<expression>'` evaluates in the tab (`MATCH
   40 from transfer-v4 dev) with the rendered record, Kev's token encoding and the PyTorch probabilities.
   Regenerate with `kev_web_export.fixtures`.
 - `fixtures/kev-4b.json`: the same 3 hand-written records plus 20 dev records, for Kev-4B.
+- `fixtures/kev-4b-vision.json`, `fixtures/kev-0.8b-vision.json`: every vision-v1 and vision-v2 image with its
+  request, Qwen's patch grid, statistics of `pixel_values` and the fp32 CPU PyTorch probabilities
+  (`kev_web_export.vision_fixtures`).
 - `fixtures/kev-*-transfer-v4-dev300.json`: 300 labelled records with fp32 reference probabilities
   (`kev_web_export.evalset`), used for the browser accuracy and Brier comparisons above.
 
@@ -201,6 +310,14 @@ real browser: `node scripts/cdp.mjs '<expression>'` evaluates in the tab (`MATCH
 - onnxruntime-node 1.30 on Node 24+ reads 0 bytes from `Float16Array` float16 tensors, so the tests hide
   `Float16Array` (`test/no-float16.ts`). Browsers are not affected.
 - Requests run one at a time per model instance.
+
+## Related
+
+- [cua-s1.js](https://github.com/ai-ecoverse/cua-s1.js): Cua's form-filling and next-action models in the browser,
+  built with this repo's export pipeline. Its cua-s1-4b screenshot bundle shares the Qwen3.5 vision tower.
+- [jev-omni.js](https://github.com/ai-ecoverse/jev-omni.js): the Gemma 4 12B Jev-Omni decision classifier on WebGPU.
+- [decision-vision-bench](https://github.com/ai-ecoverse/decision-vision-bench): Kev vision, cua-s1-4b-0.2 multimodal
+  and Jev-Omni on one mixed image decision set, with this repo's vision-v1 and vision-v2 questions.
 
 ## License
 
