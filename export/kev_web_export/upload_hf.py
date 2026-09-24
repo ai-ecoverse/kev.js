@@ -52,6 +52,8 @@ the original fp32 PyTorch model on a fixture set.
   not affiliated with this repo.
 - Conversion: LoRA merged in fp32, exported with the onnxruntime-genai model builder without the LM head, embeddings
   quantized to int8 per row. Details in the [kev.js README](https://github.com/ai-ecoverse/kev.js#readme).
+- `-vision` folders: the same decoder with an `image_embeds` input, plus the base model's own Qwen3.5 vision tower and
+  patch merger (fp16 weights), unmodified and not trained with Kev. Accuracy on images is in the kev.js README.
 """
 
 
@@ -62,6 +64,8 @@ def published_files(name, manifest):
     paths = ["manifest.json", f["head"], f["tokenizer"], f["tokenizer_config"]]
     for v, meta in manifest["variants"].items():
         if v != "fp32": paths += [meta["model"], *meta["data"]]
+    if "vision" in manifest:
+        paths += [manifest["vision"]["model"], *manifest["vision"]["data"]]
     return [f"{name}/{p}" for p in paths]
 
 
@@ -82,7 +86,8 @@ def main():
     for n, m in manifests.items():
         for v, meta in m["variants"].items():
             if v == "fp32": continue
-            rows.append(f"| `{n}` | `{v}` | {meta['bytes'] / 1e9:.2f} GB | `{m['base']}` | `{m['run']}` |")
+            size = meta["bytes"] + m.get("vision", {}).get("bytes", 0)
+            rows.append(f"| `{n}` | `{v}` | {size / 1e9:.2f} GB | `{m['base']}` | `{m['run']}` |")
     card = CARD.format(repo=a.repo, table="\n".join(rows),
                        bases="\n".join(f"- {b}" for b in sorted({m["base"] for m in manifests.values()})),
                        runs=", ".join(f"`{m['run']}`" for m in manifests.values()))
