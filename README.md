@@ -311,6 +311,14 @@ real browser: `node scripts/cdp.mjs '<expression>'` evaluates in the tab (`MATCH
   `Float16Array` (`test/no-float16.ts`). Browsers are not affected.
 - Requests run one at a time per model instance.
 
+## Related
+
+- [cua-s1.js](https://github.com/ai-ecoverse/cua-s1.js): Cua's form-filling and next-action models in the browser,
+  built with this repo's export pipeline. Its cua-s1-4b screenshot bundle shares the Qwen3.5 vision tower.
+- [jev-omni.js](https://github.com/ai-ecoverse/jev-omni.js): the Gemma 4 12B Jev-Omni decision classifier on WebGPU.
+- [decision-vision-bench](https://github.com/ai-ecoverse/decision-vision-bench): Kev vision, cua-s1-4b-0.2 multimodal
+  and Jev-Omni on one mixed image decision set, with this repo's vision-v1 and vision-v2 questions.
+
 ## License
 
 Apache-2.0, like Kev and the Qwen3.5 weights. Kev itself is vendored as a pinned submodule (`vendor/kev`).
