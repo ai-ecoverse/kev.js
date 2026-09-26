@@ -11,6 +11,8 @@ CARD = """---
 license: apache-2.0
 library_name: kev.js
 pipeline_tag: text-classification
+# Immediate parents: Jared's Hub checkpoints. Their cards already name the Qwen3.5 bases, so the model tree is
+# Qwen → kev-* → this repo (listing Qwen here would flatten that hop).
 base_model:
 {bases}
 tags: [kev, decision-model, onnx, onnxruntime-web, webgpu, quantized, int8]
@@ -46,7 +48,7 @@ the original fp32 PyTorch model on a fixture set.
 
 - Models and training: [jaredpalmer/kev](https://github.com/jaredpalmer/kev) (Apache-2.0). Source checkpoints:
   {runs}.
-- Base models: [Qwen3.5](https://huggingface.co/Qwen) (Apache-2.0).
+- Base models: [Qwen3.5](https://huggingface.co/Qwen) (Apache-2.0) — via the Kev checkpoints above ({qwen_bases}).
 - Architecture described in [Jev's Architecture Unmasked](https://archerhume.com/posts/jevs-architecture-unmasked).
   The API shapes follow [TypeSafe's System One](https://docs.typesafe.ai/api); Jev is TypeSafe's hosted model and is
   not affiliated with this repo.
@@ -55,6 +57,11 @@ the original fp32 PyTorch model on a fixture set.
 - `-vision` folders: the same decoder with an `image_embeds` input, plus the base model's own Qwen3.5 vision tower and
   patch merger (fp16 weights), unmodified and not trained with Kev. Accuracy on images is in the kev.js README.
 """
+
+
+def hub_id(run: str) -> str:
+    """`jaredpalmer/kev-4b@abc…` → `jaredpalmer/kev-4b` (the Hub repo the model tree links)."""
+    return run.partition("@")[0]
 
 
 def published_files(name, manifest):
@@ -69,37 +76,54 @@ def published_files(name, manifest):
     return [f"{name}/{p}" for p in paths]
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--models", default="../public/models")
-    ap.add_argument("--repo", default="ai-ecoverse/kev.js")
-    ap.add_argument("--only", help="comma-separated model names; default all")
-    ap.add_argument("--private", action="store_true")
-    ap.add_argument("--dry-run", action="store_true")
-    a = ap.parse_args()
-    everything = sorted(d for d in os.listdir(a.models) if os.path.exists(f"{a.models}/{d}/manifest.json"))
-    names = a.only.split(",") if a.only else everything
-    # the card describes every packaged model, not just the ones this run uploads
-    manifests = {n: json.load(open(f"{a.models}/{n}/manifest.json")) for n in everything}
-
+def model_card(repo, manifests):
+    """README.md for the Hub repo from the packaged manifests."""
     rows = ["| Folder | Variant | Download | Base | Source checkpoint |", "|---|---|---|---|---|"]
     for n, m in manifests.items():
         for v, meta in m["variants"].items():
             if v == "fp32": continue
             size = meta["bytes"] + m.get("vision", {}).get("bytes", 0)
             rows.append(f"| `{n}` | `{v}` | {size / 1e9:.2f} GB | `{m['base']}` | `{m['run']}` |")
-    card = CARD.format(repo=a.repo, table="\n".join(rows),
-                       bases="\n".join(f"- {b}" for b in sorted({m["base"] for m in manifests.values()})),
-                       runs=", ".join(f"`{m['run']}`" for m in manifests.values()))
+    kev_ids = sorted({hub_id(m["run"]) for m in manifests.values()})
+    qwen_ids = sorted({m["base"] for m in manifests.values()})
+    return CARD.format(
+        repo=repo, table="\n".join(rows),
+        bases="\n".join(f"- {b}" for b in kev_ids),
+        runs=", ".join(f"`{m['run']}`" for m in manifests.values()),
+        qwen_bases=", ".join(f"`{b}`" for b in qwen_ids),
+    )
 
-    total = sum(os.path.getsize(f"{a.models}/{p}") for n in names for p in published_files(n, manifests[n]))
-    print(f"{a.repo}: {', '.join(names)} ({total / 1e9:.1f} GB)")
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--models", default="../public/models")
+    ap.add_argument("--repo", default="ai-ecoverse/kev.js")
+    ap.add_argument("--only", help="comma-separated model names; default all")
+    ap.add_argument("--private", action="store_true")
+    ap.add_argument("--card-only", action="store_true", help="upload README.md only (no weight files)")
+    ap.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args()
+    everything = sorted(d for d in os.listdir(a.models) if os.path.exists(f"{a.models}/{d}/manifest.json"))
+    names = a.only.split(",") if a.only else everything
+    # the card describes every packaged model, not just the ones this run uploads
+    manifests = {n: json.load(open(f"{a.models}/{n}/manifest.json")) for n in everything}
+    card = model_card(a.repo, manifests)
+
+    if a.card_only:
+        print(f"{a.repo}: README.md only")
+    else:
+        total = sum(os.path.getsize(f"{a.models}/{p}") for n in names for p in published_files(n, manifests[n]))
+        print(f"{a.repo}: {', '.join(names)} ({total / 1e9:.1f} GB)")
     if a.dry_run:
         print(card)
         return
     api = HfApi(token=os.environ.get("HF_TOKEN"))
     api.create_repo(a.repo, repo_type="model", private=a.private, exist_ok=True)
-    api.upload_file(path_or_fileobj=card.encode(), path_in_repo="README.md", repo_id=a.repo, repo_type="model")
+    api.upload_file(path_or_fileobj=card.encode(), path_in_repo="README.md", repo_id=a.repo, repo_type="model",
+                    commit_message="card: base_model = Jared's kev Hub checkpoints")
+    if a.card_only:
+        print(f"https://huggingface.co/{a.repo}")
+        return
     remote = set(api.list_repo_files(a.repo))
     for n in names:
         files = published_files(n, manifests[n])
