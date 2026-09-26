@@ -110,7 +110,7 @@ class VisionKev:
         import copy
         from transformers import DynamicCache
         rec, meta = to_record(SystemOneRequest.model_validate(req))
-        enc = self.model.encode(self.tok, rec, max_state=8192, max_branch=16384)
+        enc = self.model.encode(self.tok, rec, max_state=65536, max_branch=73728)
         S, _, rows = rows_of(enc)
         if embeds is None and image is not None: embeds = self.image_embeds(image)
         if embeds is not None:

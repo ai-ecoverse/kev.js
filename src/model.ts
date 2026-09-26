@@ -34,7 +34,7 @@ export interface VariantManifest {
   outputs: IOInfo[];
   /** parity against the fp32 PyTorch model on the bundled fixtures */
   parity?: { max_abs_dp: number; argmax_flips: number; questions: number };
-  /** rows of the graph's rotary tables (8,192 after postprocess): no position may reach it */
+  /** rows of the graph's rotary tables (SERVE_MAX_BRANCH = 73,728 after postprocess): no position may reach it */
   max_positions?: number;
 }
 
@@ -150,7 +150,7 @@ export class Kev {
     this.ort = a.ort; this.session = a.session; this.head = a.head; this.tokenizer = a.tokenizer; this.vision = a.vision;
     this.manifest = a.manifest; this.variant = a.variant; this.v = a.manifest.variants[a.variant];
     if (!this.v) throw new Error(`unknown variant ${a.variant}; have ${Object.keys(a.manifest.variants)}`);
-    this.opts = { stateCacheSize: 4, dateFacts: false, maxState: 8192, maxBranch: 8192, ...a.options };
+    this.opts = { stateCacheSize: 4, dateFacts: false, maxState: 65536, maxBranch: 73728, ...a.options };
     this.head.temperature = a.options?.temperature ?? temperatureFor(a.manifest.run, a.manifest.temperature);
     this.imageInput = this.v.inputs.some((i) => i.name === "image_embeds");
     if (this.vision && !(this.imageInput && a.manifest.vision)) throw new Error(`variant ${a.variant} of ${a.manifest.name} takes no image_embeds`);

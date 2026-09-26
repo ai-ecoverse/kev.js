@@ -65,7 +65,7 @@ class OrtVisionKev:
     def probs(self, req, image=None, embeds=None):
         rec, _ = to_record(SystemOneRequest.model_validate(req))
         for q in rec["questions"]: q["label"] = 0
-        enc = encode(self.tok, rec, max_state=8192, max_branch=16384)
+        enc = encode(self.tok, rec, max_state=65536, max_branch=73728)
         S, _, rows = rows_of(enc)
         if embeds is None and image is not None: embeds = self.embeds(image)
         c = self.cfg

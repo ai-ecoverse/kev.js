@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 import * as ort from "onnxruntime-node";
 import { loadKev, modelFiles, type KevManifest, type OrtModule, type Progress, type ReadModelFile } from "../src/index.ts";
 import { fixtures, haveModel, modelDir, tokenizerFiles } from "./fixtures.ts";
-import { bounds, Parity } from "./parity.ts";
+import { bounds, Parity, MAX_ABS_DP_FLOOR } from "./parity.ts";
 import { stubOrt, syntheticBundle, withoutFetch } from "./synthetic.ts";
 
 async function bundle() {
@@ -102,6 +102,14 @@ test("the parity rule catches a runtime-wide shift through the mean, over enough
   assert.deepEqual(p.violations({ max: 0.19, mean: 0.02 }), []);                    // six questions: no mean verdict
   for (let i = 6; i < 20; i++) p.add(`q${i}`, [0.8, 0.2], [0.77, 0.23]);
   assert.deepEqual(p.violations({ max: 0.19, mean: 0.02 }).map((v) => v.split(" ")[0]), ["mean"]);
+});
+
+test("bounds floors a lucky packaging measurement so x86 CI still fits known tails", () => {
+  const low = { variants: { q8f32: { parity: { max_abs_dp: 0.026387 } } } } as unknown as import("../src/index.ts").KevManifest;
+  const high = { variants: { q8f32: { parity: { max_abs_dp: 0.2 } } } } as unknown as import("../src/index.ts").KevManifest;
+  assert.equal(bounds(low, "q8f32").max, MAX_ABS_DP_FLOOR);                         // 2×0.026 < floor
+  assert.equal(bounds(high, "q8f32").max, 0.4);                                     // 2×0.2 > floor
+  assert.deepEqual(bounds(low, "fp32"), { max: 1e-4, mean: 1e-4 });
 });
 
 /** An in-memory Cache Storage (the parts loadKev uses) that logs deletions into `events`. */

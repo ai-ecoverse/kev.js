@@ -64,9 +64,10 @@ the single commit that replaces `manifest.json`. Browsers key their cache by the
 every file it names, so a bundle rebuilt for the same checkpoint (a new exporter, or the spliced vision decoder at the
 text graph's URL) is never served from stale cached bytes; manifests without one fall back to `run`. Other revisions
 are evicted before the download, so a quota that fits one bundle but not two still ends up with the new one. Each
-variant records `max_positions`, the rows its rotary tables keep (8,192; the fp32 reference keeps 262,144), and a
+variant records `max_positions`, the rows its rotary tables keep (73,728 = `kev.serve`'s `SERVE_MAX_BRANCH`; the
+fp32 builder keeps 262,144), and a
 request that would pass them fails with a `RangeError` before the session runs. Text requests within `kev.serve`'s
-limits (state plus one question at most 8,192 tokens) always fit; an image moves the positions on by its larger side
+limits (state up to 65,536 tokens, state plus one question at most 73,728) always fit; an image moves the positions on by its larger side
 in merged patches plus 2 (26 for 768 × 768, up to 290 for a 64 × 9216 strip), so a near-limit state with an image can
 be rejected. `package.py --update <bundle>` adds both fields to an existing manifest without touching its files.
 
@@ -184,7 +185,8 @@ with no custom attention mask:
    WebGPU; the other 8 are shape ops.
 3. **Post-process** (`kev_web_export.postprocess`): the builder can only quantize embeddings to int4. The
    embedding table (0.5 GB fp16 for 0.8B, 2.5 GB fp32 for 4B) becomes int8 with one scale per row, using plain
-   `Gather`/`Cast`/`Mul`. The rotary caches are trimmed from 262k positions to 8,192, which is `kev.serve`'s limit.
+   `Gather`/`Cast`/`Mul`. The rotary caches are trimmed from 262k positions to 73,728 (`SERVE_MAX_BRANCH`), which is
+   `kev.serve`'s state+branch limit (65,536 + 8,192).
    External weights are split into files of at most 32 MB (`--shard-mb`): proxies and CDNs cap response bodies (bb
    connect cuts one at 34.5 MiB), a failed file is cheap to retry, and browsers cap a single buffer near 2 GB. A
    single tensor larger than that keeps its own file — Kev-9B's MLP matrices are 50 MB each — which Hugging Face
