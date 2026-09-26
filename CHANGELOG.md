@@ -1,3 +1,10 @@
+## [0.5.1](https://github.com/ai-ecoverse/kev.js/compare/v0.5.0...v0.5.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* **api:** Score confidence uses TypeSafe's uniform-MAD normaliser ([3c0725e](https://github.com/ai-ecoverse/kev.js/commit/3c0725e86b3ade668a86c9857f84a7eda665e7db)), closes [jaredpalmer/kev#95](https://github.com/jaredpalmer/kev/issues/95) [#139](https://github.com/ai-ecoverse/kev.js/issues/139)
+
 # [0.5.0](https://github.com/ai-ecoverse/kev.js/compare/v0.4.0...v0.5.0) (2026-09-24)
 
 
