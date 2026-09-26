@@ -1,3 +1,15 @@
+# [0.6.0](https://github.com/ai-ecoverse/kev.js/compare/v0.5.1...v0.6.0) (2026-09-26)
+
+
+### Bug Fixes
+
+* **test:** floor q8 max |dp| bound for cross-CPU variance ([b7b36c9](https://github.com/ai-ecoverse/kev.js/commit/b7b36c90a6e0329c7834e9ddc6396a94eafe5c69))
+
+
+### Features
+
+* **export:** ship 64k-ready graphs (SERVE_MAX_BRANCH rope) ([b37154b](https://github.com/ai-ecoverse/kev.js/commit/b37154b2509986bbac56d7b1ba1c4ee293c09a7c))
+
 ## [0.5.1](https://github.com/ai-ecoverse/kev.js/compare/v0.5.0...v0.5.1) (2026-09-26)
 
 
