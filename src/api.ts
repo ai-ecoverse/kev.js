@@ -201,16 +201,29 @@ export function toRecord(req: SystemOneRequest): { record: DecisionRecord; meta:
 
 const argmax = (p: number[]) => p.reduce((best, v, i) => (v > p[best] ? i : best), 0);
 
-export function choiceConfidence(p: number[]): number {
-  const K = p.length;
-  return K === 1 ? 1 : (Math.max(...p) - 1 / K) / (1 - 1 / K);
+/** Both confidence formulas mirror TypeSafe's reference adapter, system-one-adapter 0.2.1
+ * (_utils/confidence_metrics.py): p is normalised to sum 1 (all zeros -> uniform), one option -> 1. */
+function normalizeProbs(p: number[]): number[] {
+  const t = p.reduce((s, x) => s + x, 0);
+  return t === 0 ? p.map(() => 1 / p.length) : p.map((x) => x / t);
 }
 
-/** Approximation of TypeSafe's 'distance from the modal level' statistic: 1 - E|level - mode| / (L - 1). */
+/** (p_max - 1/K) / (1 - 1/K): 0 at uniform, 1 at certainty. */
+export function choiceConfidence(p: number[]): number {
+  const K = p.length;
+  return K === 1 ? 1 : (Math.max(...normalizeProbs(p)) - 1 / K) / (1 - 1 / K);
+}
+
+/** max(0, 1 - E|level - mode| / D), D = mean absolute deviation of a uniform distribution over the L levels around its
+ * mean (L-1)/2; mode = first most likely level. 1 when all mass is on one level, 0 at uniform or anything as spread.
+ * kev.api since 134d170 (jaredpalmer/kev#95 / #139). */
 export function scoreConfidence(p: number[]): number {
-  if (p.length === 1) return 1;
-  const mode = argmax(p);
-  return 1 - p.reduce((s, pi, i) => s + pi * Math.abs(i - mode), 0) / (p.length - 1);
+  const L = p.length;
+  if (L === 1) return 1;
+  const n = normalizeProbs(p);
+  const mode = argmax(n);
+  const D = Array.from({ length: L }, (_, i) => Math.abs(i - (L - 1) / 2)).reduce((s, x) => s + x, 0) / L;
+  return Math.max(0, 1 - n.reduce((s, pi, i) => s + pi * Math.abs(i - mode), 0) / D);
 }
 
 /** Python round(x, digits), which rounds the exact binary value: toFixed does the same, except that it breaks exact

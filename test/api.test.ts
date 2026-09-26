@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { dateFacts, pyFloat, pyRound, render, roundProb, scoreConfidence, toAnswers, toRecord, validate, ValidationError, pyJsonDumps, withDateFacts } from "../src/api.ts";
+import { choiceConfidence, dateFacts, pyFloat, pyRound, render, roundProb, scoreConfidence, toAnswers, toRecord, validate, ValidationError, pyJsonDumps, withDateFacts } from "../src/api.ts";
 import { fixtures } from "./fixtures.ts";
 
 test("toRecord renders every fixture exactly like kev.api.to_record", () => {
@@ -76,4 +76,55 @@ test("validation mirrors the pydantic models", () => {
   const answers = toAnswers([[0.25, 0.75], [1], [1]], meta);
   assert.deepEqual(answers.b, { type: "score", score: 0, legend: { 0: "only" }, probabilities: { 0: 1 }, confidence: 1 });
   assert.equal(scoreConfidence([1]), 1);
+});
+
+test("toAnswers confidence matches kev.api formulas (uniform-MAD Score)", () => {
+  const { meta } = toRecord(validate({
+    state: "s",
+    questions: {
+      n: { type: "noul" },
+      c: { type: "choice", criteria: { a: null, b: null, c: null } },
+      s: { type: "score", criteria: ["lo", "mid", "hi"] },
+    },
+  }));
+  const ans = toAnswers([[0.3, 0.7], [0.8, 0.15, 0.05], [0.1, 0.3, 0.6]], meta);
+  assert.deepEqual(ans.n, { type: "noul", noul: 0.7 });
+  assert.equal(ans.c.type, "choice");
+  assert.equal(ans.c.choice, "a");
+  assert.deepEqual(ans.c.probabilities, { a: 0.8, b: 0.15, c: 0.05 });
+  assert.equal(ans.c.confidence, roundProb((0.8 - 1 / 3) / (1 - 1 / 3)));
+  assert.equal(ans.s.type, "score");
+  assert.equal(ans.s.score, 1.5);
+  assert.deepEqual(ans.s.probabilities, { 0: 0.1, 1: 0.3, 2: 0.6 });
+  assert.deepEqual(ans.s.legend, { 0: "lo", 1: "mid", 2: "hi" });
+  // 1 - (0.1*2 + 0.3*1) / (2/3) = 0.25 under the TypeSafe uniform-MAD normaliser
+  assert.equal(ans.s.confidence, 0.25);
+});
+
+test("confidence edge cases match kev.api (134d170)", () => {
+  assert.equal(choiceConfidence([1.0]), 1.0);
+  assert.equal(scoreConfidence([1.0]), 1.0);
+  assert.equal(choiceConfidence([0.5, 0.5]), 0.0);
+  assert.ok(Math.abs(choiceConfidence([1.0, 0.0, 0.0]) - 1.0) < 1e-12);
+  assert.equal(scoreConfidence([0.0, 1.0, 0.0]), 1.0);
+  assert.equal(scoreConfidence([0.0, 0.0, 0.0, 1.0]), 1.0);
+  for (let L = 2; L < 11; L++) assert.equal(scoreConfidence(Array(L).fill(1 / L)), 0.0);
+  assert.equal(scoreConfidence([0.5, 0.0, 0.5]), 0.0);
+  assert.equal(scoreConfidence([2.0, 6.0, 0.0]), scoreConfidence([0.25, 0.75, 0.0]));
+  assert.equal(choiceConfidence([0.0, 0.0]), 0.0);
+  assert.equal(scoreConfidence([0.0, 0.0, 0.0]), 0.0);
+});
+
+test("scoreConfidence matches TypeSafe docs examples", () => {
+  // docs.typesafe.ai/primitives/score — display probs/confidence at two decimals
+  const cases: [number[], number][] = [
+    [[0.0, 0.57, 0.43], 0.35],
+    [[0.0, 0.14, 0.86, 0.0, 0.0], 0.89],
+    [[0.0, 0.0, 0.48, 0.52], 0.52],
+    [[0.0, 0.74, 0.26], 0.61],
+    [[0.0, 0.0, 0.0, 1.0], 1.0],
+  ];
+  for (const [p, want] of cases) {
+    assert.ok(Math.abs(Number(scoreConfidence(p).toFixed(2)) - want) < 0.011, `${JSON.stringify(p)} -> ${scoreConfidence(p)}`);
+  }
 });
