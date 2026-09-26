@@ -3,12 +3,20 @@
 - The embedding table is the single largest tensor (vocab 248k x hidden) and the builder only quantizes it to int4
   (GatherBlockQuantized). --embed int8 stores it as int8 with one scale per row, dequantized after the lookup with
   standard ops (Gather, Cast, Mul), so every execution provider can run it.
-- The rotary cos/sin caches are sized for the base model's 262k context. Kev never sees more than a few thousand
-  positions (8,192 tokens per state + question at serving time), so --rope-positions trims them."""
+- The rotary cos/sin caches are sized for the base model's 262k context. Trim them to kev.serve's row limit
+  (SERVE_MAX_BRANCH = 65,536 state + 8,192 branch) so a full served request fits the tables."""
 import argparse, os, shutil
 import numpy as np
 import onnx
 from onnx import helper, numpy_helper, TensorProto
+
+# Keep in sync with kev.model.SERVE_MAX_BRANCH (vendor/kev); imported lazily so --help works without the submodule path.
+def _serve_max_branch():
+    try:
+        from kev.model import SERVE_MAX_BRANCH
+        return int(SERVE_MAX_BRANCH)
+    except Exception:
+        return 73728
 
 
 def main():
@@ -16,12 +24,14 @@ def main():
     ap.add_argument("--src", required=True, help="builder output dir")
     ap.add_argument("--out", required=True)
     ap.add_argument("--embed", choices=["keep", "int8"], default="int8")
-    ap.add_argument("--rope-positions", type=int, default=8192)
+    ap.add_argument("--rope-positions", type=int, default=None,
+                    help=f"rows kept in cos_cache/sin_cache (default: SERVE_MAX_BRANCH={_serve_max_branch()})")
     ap.add_argument("--shard-mb", type=int, default=32,
                     help="max size of one external-data file. Small shards keep every request well inside proxy and "
                          "CDN response caps (bb connect cuts a response at 34.5 MiB) and make a failed download cheap "
                          "to retry; browsers also cap a single buffer near 2 GB")
     a = ap.parse_args()
+    a.rope_positions = a.rope_positions or _serve_max_branch()
     m = onnx.load(f"{a.src}/model.onnx", load_external_data=True)
     g = m.graph
     inits = {t.name: t for t in g.initializer}
@@ -30,6 +40,7 @@ def main():
         t = inits[name]; arr = numpy_helper.to_array(t)
         if arr.shape[0] > a.rope_positions:
             t.CopyFrom(numpy_helper.from_array(np.ascontiguousarray(arr[: a.rope_positions]), name))
+        print(f"{name}: {arr.shape[0]} -> {min(arr.shape[0], a.rope_positions)} positions")
 
     if a.embed == "int8":
         (node,) = [n for n in g.node if n.op_type == "Gather" and n.input[0] == "model.embed_tokens.weight"]

@@ -38,17 +38,17 @@ export function userTokens(tok: TokenizerLike, text: string): number[] {
 }
 
 export interface EncodeOptions {
-  /** state tokens kept, including <state>. Defaults 8192 match the shipped graphs' rotary tables
-   * (SERVE_MAX_*_8K); kev.serve itself now allows 65,536 (SERVE_MAX_STATE). Training still defaults to 384. */
+  /** state tokens kept, including <state>. Defaults match kev.serve (SERVE_MAX_STATE = 65,536). Training still
+   * defaults to 384. The graph's rotary tables must cover this many positions (`manifest.max_positions`). */
   maxState?: number;
-  /** max tokens of state + one branch (default 8192; same as maxState for the 8k graphs) */
+  /** max tokens of state + one branch (default SERVE_MAX_BRANCH = 73,728) */
   maxBranch?: number;
   /** throw instead of truncating an over-long state */
   strict?: boolean;
 }
 
 export function encode(tok: TokenizerLike, rec: DecisionRecord, sp: SpecialTokens, o: EncodeOptions = {}): Encoding {
-  const maxState = o.maxState ?? 8192, maxBranch = o.maxBranch ?? 8192;
+  const maxState = o.maxState ?? 65536, maxBranch = o.maxBranch ?? 73728;
   const stateTokens = userTokens(tok, rec.state);
   if (o.strict && stateTokens.length + 1 > maxState) throw new RangeError(`state exceeds ${maxState} tokens: ${stateTokens.length + 1}`);
   const state = [sp.state, ...stateTokens.slice(0, maxState - 1)];

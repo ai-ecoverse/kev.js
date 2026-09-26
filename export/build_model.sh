@@ -27,8 +27,8 @@ uv run python -m kev_web_export.merge --run "$run" --out "$out"
 for v in "${web[@]}"; do
   log "build $(src "$v")"
   ./build.sh "$out" "$(src "$v")"
-  log "shard $v"
-  uv run python -m kev_web_export.postprocess --src "$out/onnx-$(src "$v")" --out "$out/web-$v" | tail -1 | cut -c1-120
+  log "shard $v (rope -> SERVE_MAX_BRANCH)"
+  uv run python -m kev_web_export.postprocess --src "$out/onnx-$(src "$v")" --out "$out/web-$v"
   rm -rf "$out/onnx-$(src "$v")"
 done
 log "build fp32 reference"
