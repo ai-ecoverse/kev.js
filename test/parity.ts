@@ -4,7 +4,8 @@
 // the manifest's measurement), 0.0993 and 0.124 (two x86-64 runners), while the mean over questions stays near 0.008.
 // So: the mean catches a runtime bug (it shifts many questions), over at least MEAN_MIN_QUESTIONS (a handful of
 // questions measures those questions: WebGPU on SwiftShader, two tickets and one near-tie among their six questions,
-// has mean 0.018); the maximum is capped at twice the manifest's figure,
+// has mean 0.018); the maximum is twice the manifest's figure, but not below MAX_ABS_DP_FLOOR — packaging on a lucky
+// CPU (ARM measured 0.026 for the 64k rebuild) would otherwise fail x86 CI on the same known heavy-tail question —
 // and an answer may change only where the reference itself is a near-tie (its margin between the two answers is at
 // most NEAR_TIE; readme-ticket's department question, 0.442 / 0.421, flips on some x86-64 runners).
 import type { KevManifest } from "../src/index.ts";
@@ -12,13 +13,16 @@ import type { KevManifest } from "../src/index.ts";
 export const NEAR_TIE = 0.05;
 export const MEAN_ABS_DP = 0.02;
 export const MEAN_MIN_QUESTIONS = 20;
+/** Floor for 2× measured max |dp|: covers known x86/WASM/WebGPU tails (~0.12) when packaging got a lucky low figure. */
+export const MAX_ABS_DP_FLOOR = 0.25;
 
 export const argmax = (p: number[]) => p.indexOf(Math.max(...p));
 
 /** Bounds for one variant: the largest |dp| of any question, and the mean of those over the questions. */
 export function bounds(manifest: KevManifest, variant: string): { max: number; mean: number } {
   if (variant === "fp32") return { max: 1e-4, mean: 1e-4 };
-  return { max: 2 * (manifest.variants[variant].parity?.max_abs_dp ?? 0.1), mean: MEAN_ABS_DP };
+  const measured = manifest.variants[variant].parity?.max_abs_dp ?? 0.1;
+  return { max: Math.max(2 * measured, MAX_ABS_DP_FLOOR), mean: MEAN_ABS_DP };
 }
 
 /** Compares probabilities with the reference, question by question, and keeps the worst deviation and every flip. */
