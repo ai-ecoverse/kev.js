@@ -3,7 +3,7 @@
   "extends": ["config:recommended"],
   "packageRules": [
     {
-      "description": "export/ runs the vendored kev (vendor/kev) and has to reproduce its reference numbers, so it keeps kev's own pins (Python >=3.12,<3.14 and torch >=2.6,<2.9 as of 557598f; upstream capped Python so uv finds torch wheels). No CI job builds the export, so a bump here would be untested. Move these pins when the submodule moves them.",
+      "description": "export/ runs the vendored kev (vendor/kev) and has to reproduce its reference numbers, so it keeps kev's own pins (Python >=3.12,<3.14 and torch >=2.6,<2.9 as of f153596; upstream capped Python so uv finds torch wheels). No CI job builds the export, so a bump here would be untested. Move these pins when the submodule moves them.",
       "matchFileNames": ["export/**"],
       "enabled": false
     }

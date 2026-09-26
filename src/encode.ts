@@ -38,9 +38,10 @@ export function userTokens(tok: TokenizerLike, text: string): number[] {
 }
 
 export interface EncodeOptions {
-  /** state tokens kept, including <state> (kev.serve uses 8192; training used 384) */
+  /** state tokens kept, including <state>. Defaults 8192 match the shipped graphs' rotary tables
+   * (SERVE_MAX_*_8K); kev.serve itself now allows 65,536 (SERVE_MAX_STATE). Training still defaults to 384. */
   maxState?: number;
-  /** max tokens of state + one branch */
+  /** max tokens of state + one branch (default 8192; same as maxState for the 8k graphs) */
   maxBranch?: number;
   /** throw instead of truncating an over-long state */
   strict?: boolean;
