@@ -315,7 +315,7 @@ real browser: `node scripts/cdp.mjs '<expression>'` evaluates in the tab (`MATCH
 - JSON parsing loses two things Kev's Python server keeps. `1.0` arrives as `1` and is rendered `1`, where Python
   renders `1.0`. Object keys that look like integers (`"10"`, `"2"`) are iterated in numeric order, which can
   reorder Choice options with numeric names.
-- The first load downloads 822 MB for Kev-0.8B, or 4.7 GB for Kev-4B, and the files stay in Cache Storage. Serve
+- The first load downloads 838 MB for Kev-0.8B, or 4.7 GB for Kev-4B, and the files stay in Cache Storage. Serve
   them from a fast origin: over a tunnel at ~1.2 MB/s, Kev-0.8B takes 11 minutes. More parallel requests do not
   help on a bandwidth-limited link (measured: 1.2 MB/s with one stream, 0.75 MB/s across six), so the loader
   fetches 2 files at a time.

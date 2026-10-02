@@ -29,7 +29,7 @@
   <section id="demo">
     <h2>Try it</h2>
     <p class="note">
-      The first load downloads the weights once and keeps them in the browser cache. Kev-0.8B is 822 MB; the bigger
+      The first load downloads the weights once and keeps them in the browser cache. Kev-0.8B is 838 MB; the bigger
       models are worth the wait if your connection can take it.
     </p>
     <div id="loader" class="panel">
@@ -152,8 +152,8 @@ res.answers.frustration.score;         // 1.29   expected level, 0-based</code><
     </table>
     <p class="note">
       Weights are int8 with fp32 activations. Browser probabilities track the full-precision model closely: on 300
-      labelled records Kev-4B scores 0.773, exactly the full-precision model's accuracy, with a mean probability
-      difference of 0.0028 and not one answer changed. int4 is not
+      labelled records Kev-4B scores 0.800 against the full-precision model's 0.807, with a mean probability
+      difference of 0.0032 and 3 of 300 answers changed. int4 is not
       offered — it moves probabilities by 0.2–0.8 and flips answers, which defeats the point of a calibrated model.
       Timings are from an Apple M4 Max; the WASM fallback is roughly 5× slower.
     </p>
