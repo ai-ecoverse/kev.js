@@ -38,31 +38,31 @@ marked @T.
 
 | Model (pinned) | Condition | Accuracy | Brier | Brier @T | NLL | Mean top p |
 |---|---|---|---|---|---|---|
-| Kev-4B `kev-4b@4bc64c6` (T = 2.14) | image | 0.875 [0.822, 0.927] | 0.173 | 0.184 | 0.376 | 0.90 |
-| | caption | 0.883 [0.811, 0.944] | 0.155 | 0.150 | 0.344 | 0.94 |
-| | omitted | 0.320 [0.254, 0.389] | 0.746 | 0.696 | 1.404 | 0.47 |
-| | shuffled | 0.234 [0.172, 0.299] | 1.293 | 1.165 | 5.552 | 0.85 |
-| Kev-0.8B `kev-0.8b@2256796` (T = 2.41) | image | 0.672 [0.583, 0.756] | 0.466 | 0.453 | 1.017 | 0.76 |
-| | caption | 0.742 [0.659, 0.822] | 0.335 | 0.369 | 0.681 | 0.80 |
-| | omitted | 0.320 [0.244, 0.397] | 0.758 | 0.688 | 1.427 | 0.54 |
-| | shuffled | 0.242 [0.180, 0.305] | 1.128 | 0.907 | 2.855 | 0.74 |
+| Kev-4B `kev-4b@139fdd9` (T = 2.41) | image | 0.898 [0.847, 0.945] | 0.159 | 0.181 | 0.390 | 0.91 |
+| | caption | 0.914 [0.865, 0.960] | 0.121 | 0.135 | 0.260 | 0.95 |
+| | omitted | 0.305 [0.240, 0.376] | 0.779 | 0.705 | 1.493 | 0.49 |
+| | shuffled | 0.242 [0.178, 0.312] | 1.324 | 1.160 | 6.165 | 0.87 |
+| Kev-0.8B `kev-0.8b@9a45d25` (T = 2.35) | image | 0.648 [0.551, 0.738] | 0.433 | 0.453 | 0.906 | 0.71 |
+| | caption | 0.750 [0.669, 0.831] | 0.343 | 0.403 | 0.689 | 0.74 |
+| | omitted | 0.344 [0.272, 0.412] | 0.724 | 0.681 | 1.376 | 0.49 |
+| | shuffled | 0.258 [0.197, 0.326] | 1.069 | 0.871 | 2.514 | 0.70 |
 
 Accuracy per family, `image` condition (`caption` in parentheses):
 
 | Model | inbox | shop | dashboard | orders | line | bars | dots | departures | label | terms |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Kev-4B | 0.83 (0.75) | 0.83 (0.67) | 1.00 (0.94) | 0.83 (0.83) | 1.00 (1.00) | 0.67 (0.58) | 0.75 (1.00) | 1.00 (1.00) | 1.00 (1.00) | 1.00 (1.00) |
-| Kev-0.8B | 0.50 (0.50) | 0.75 (0.75) | 0.69 (0.81) | 0.58 (0.42) | 1.00 (0.50) | 0.67 (0.58) | 0.42 (0.92) | 0.88 (0.88) | 0.92 (1.00) | 0.62 (1.00) |
+| Kev-4B | 0.83 (0.75) | 0.83 (0.75) | 1.00 (1.00) | 0.83 (0.83) | 1.00 (1.00) | 1.00 (0.75) | 0.71 (1.00) | 1.00 (1.00) | 1.00 (1.00) | 1.00 (1.00) |
+| Kev-0.8B | 0.42 (0.58) | 0.92 (0.75) | 0.69 (0.81) | 0.42 (0.42) | 1.00 (0.58) | 0.58 (0.50) | 0.42 (0.92) | 0.75 (0.88) | 0.92 (1.00) | 0.62 (1.00) |
 
-By type, `image`: Kev-4B `noul` 0.979, `choice` 0.938, `score` 0.729; Kev-0.8B 0.750, 0.938, 0.417.
+By type, `image`: Kev-4B `noul` 0.979, `choice` 0.969, `score` 0.771; Kev-0.8B 0.729, 0.875, 0.417.
 
-What breaks: counting. 13 of Kev-4B's 16 errors are `score` questions that count (red dots, usually one short; bars
-above 60, off by one; products over $50; unread emails, twice answered 0 where 5 and 7 were unread); the other three
-read one row or bar of a table or chart. Kev-4B with the image is as good as with the text caption everywhere except the
+What breaks: counting. 11 of Kev-4B's 13 errors are `score` questions that count (red dots, usually one or two short;
+products over $50, one short; unread emails, twice answered too many); the other two read one row of the orders
+table. Kev-4B with the image is as good as with the text caption everywhere except the
 dots, where the caption states the count. Where the caption is a long list (inbox, shop, orders, bars), the image does
 as well as or better than the caption: the text version asks Kev to count over a long list too. Downscaling full
 screens to the pixel cap costs Kev-4B nothing visible here, including the 11-13 px fine print. Kev-0.8B loses more
-on the image than on the caption for dots, terms and dashboard, and its `score` accuracy is near chance.
+on the image than on the caption for dots, terms, dashboard and inbox, and its `score` accuracy is near chance.
 
 Per-question logits are in `results/<model>/rows.json`, the summary with per-type and per-family accuracy in
 `results/<model>/report.json`. Browser (onnxruntime-web, WebGPU) numbers for both sets are in the repository README

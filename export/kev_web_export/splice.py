@@ -1,7 +1,7 @@
 """Give a Kev decoder graph an `image_embeds` input, without touching its weights.
 
     uv run python -m kev_web_export.splice --src build/kev-4b/onnx-fp32-cpu --out build/kev-4b/fp32-vision
-    uv run python -m kev_web_export.splice --src ../public/models/kev-4b/r-4bc64c6/q8f32 --out build/kev-4b/q8f32-vision
+    uv run python -m kev_web_export.splice --src ../public/models/kev-4b/r-139fdd9/q8f32 --out build/kev-4b/q8f32-vision
 
 `image_embeds` is [image tokens, hidden]: each <|image_pad|> position of input_ids takes the next row, in order,
 instead of the token's embedding, which is transformers' masked_scatter of the vision features into inputs_embeds

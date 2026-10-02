@@ -14,7 +14,7 @@ text counts up on all three axes, the image's tokens get (start, start + row, st
 and text after it resumes at start + max(rows, columns). Every question runs as one causal row (state + branch), which
 is `DecisionModel.forward_rows_batch` with image embeddings spliced in at the `<|image_pad|>` tokens.
 
-    uv run --group vision python -m kev_web_export.vision --run jaredpalmer/kev-4b@4bc64c6b4c4881148661ffb823ce21fcfdc79a0e"""
+    uv run --group vision python -m kev_web_export.vision --run jaredpalmer/kev-4b@139fdd94f1b6a6ad80cc15e08fcb99cac885a101"""
 import argparse, json
 import torch
 import torch.nn.functional as F
@@ -182,7 +182,7 @@ def describe(vk: VisionKev, image, prompt="This picture shows", tokens=24):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--run", default="jaredpalmer/kev-4b@4bc64c6b4c4881148661ffb823ce21fcfdc79a0e")
+    ap.add_argument("--run", default="jaredpalmer/kev-4b@139fdd94f1b6a6ad80cc15e08fcb99cac885a101")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--describe", nargs="*", default=[], help="images the stock base should describe through the splice")
     a = ap.parse_args()

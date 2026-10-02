@@ -3,8 +3,8 @@ import type { WorkerRequest, WorkerResponse } from "./worker.ts";
 import type { Answer, KevManifest, SystemOneResponse, Timing } from "../src/index.ts";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-// kev-4b-vision is Kev-4B with Qwen3.5's own vision tower (README, Images); built locally, not published yet
-const models = ["kev-0.8b", "kev-4b", "kev-9b", "kev-4b-vision"];
+// *-vision: the same decoder with Qwen3.5's own vision tower in front (README, Images)
+const models = ["kev-0.8b", "kev-4b", "kev-9b", "kev-0.8b-vision", "kev-4b-vision"];
 
 // Weights live on Hugging Face for the published page; a dev server with public/models/ serves them locally.
 // Override with VITE_MODEL_BASE, or ?models=<url> for a one-off.
@@ -267,9 +267,9 @@ document.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.
 
 /** Published numbers for the models table; measured on an M4 Max (see the repo README). */
 const MODEL_FACTS: Record<string, { size: string; acc: string; ms: string }> = {
-  "kev-0.8b": { size: "822 MB", acc: "0.660 / 0.475", ms: "108 ms" },
-  "kev-4b": { size: "4.7 GB", acc: "0.773 / 0.324", ms: "360 ms" },
-  "kev-9b": { size: "8.8 GB", acc: "0.800 / 0.318", ms: "570 ms" },
+  "kev-0.8b": { size: "838 MB", acc: "0.640 / 0.492", ms: "108 ms" },
+  "kev-4b": { size: "4.7 GB", acc: "0.800 / 0.281", ms: "360 ms" },
+  "kev-9b": { size: "8.8 GB", acc: "0.807 / 0.312", ms: "570 ms" },
 };
 const table = document.getElementById("model-table");
 if (table) table.innerHTML = models.filter((m) => MODEL_FACTS[m]).map((m) => {

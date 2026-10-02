@@ -1,6 +1,6 @@
 """Resolve a Kev run to an exact Hub commit: jaredpalmer/kev-9b -> jaredpalmer/kev-9b@<sha>.
 
-The Kev checkpoints are republished under the same repo ids (all three were updated on 2026-09-21), so an unpinned id
+The Kev checkpoints are republished under the same repo ids (updated on 2026-09-21, -24 and -30), so an unpinned id
 means "whatever main is at the moment". The export and its reference fixtures must come from the same commit; every
 step takes the pinned form, and package.py refuses to combine different ones.
 

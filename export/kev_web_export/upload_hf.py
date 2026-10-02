@@ -89,7 +89,7 @@ def model_card(repo, manifests):
     return CARD.format(
         repo=repo, table="\n".join(rows),
         bases="\n".join(f"- {b}" for b in kev_ids),
-        runs=", ".join(f"`{m['run']}`" for m in manifests.values()),
+        runs=", ".join(f"`{r}`" for r in dict.fromkeys(m["run"] for m in manifests.values())),   # vision bundles share their text bundle's run
         qwen_bases=", ".join(f"`{b}`" for b in qwen_ids),
     )
 

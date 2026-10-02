@@ -87,7 +87,7 @@ def write_report(rows, items, run, base, version, temperature, out):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--run", default="jaredpalmer/kev-4b@4bc64c6b4c4881148661ffb823ce21fcfdc79a0e")
+    ap.add_argument("--run", default="jaredpalmer/kev-4b@139fdd94f1b6a6ad80cc15e08fcb99cac885a101")
     ap.add_argument("--set", default="../eval/vision-v1")
     ap.add_argument("--device", default="mps")
     ap.add_argument("--out", required=True)

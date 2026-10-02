@@ -107,14 +107,14 @@ const kev = await loadKev("https://huggingface.co/ai-ecoverse/kev.js/resolve/mai
   },
 });
 
-// Kev-4B (kev-4b@4bc64c6) in Chrome:
-res.answers.department.choice;         // "shipping"
-res.answers.department.probabilities;  // { returns: 0.42, shipping: 0.43, billing: 0.15 }
-res.answers.escalate.noul;             // 0.95   probability of yes
-res.answers.frustration.score;         // 1.46   expected level, 0-based</code></pre>
+// Kev-4B (kev-4b@139fdd9, Kev 1.0) in Chrome:
+res.answers.department.choice;         // "returns"
+res.answers.department.probabilities;  // { returns: 0.51, shipping: 0.36, billing: 0.13 }
+res.answers.escalate.noul;             // 0.72   probability of yes
+res.answers.frustration.score;         // 1.29   expected level, 0-based</code></pre>
     <p>
       The ticket is about a late delivery, a wrong size and a double charge, and the department probabilities say
-      exactly that: returns and shipping are a coin flip, billing is a real possibility. That is what you lose with a
+      exactly that: returns leads, shipping is close behind, billing is a real possibility. That is what you lose with a
       single label, and why routing on <code>confidence</code> beats routing on <code>choice</code>.
     </p>
     <table class="api">

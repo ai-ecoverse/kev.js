@@ -99,7 +99,7 @@ def half_weights(src: str, out_dir: str, shard_mb: int = 32):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--run", default="jaredpalmer/kev-4b@4bc64c6b4c4881148661ffb823ce21fcfdc79a0e")
+    ap.add_argument("--run", default="jaredpalmer/kev-4b@139fdd94f1b6a6ad80cc15e08fcb99cac885a101")
     ap.add_argument("--out", required=True)
     ap.add_argument("--opset", type=int, default=18)
     a = ap.parse_args()
