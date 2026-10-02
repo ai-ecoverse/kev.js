@@ -239,6 +239,15 @@ WASM fallback runs single-threaded; WebGPU is unaffected.
 `kev.systemOne(req, { onAnswer })` reports each question as it finishes, so a UI can fill answers in as they land.
 `kev.systemOneSeparate()` answers each question in its own pass. `kev.probs(record)` returns probabilities after the
 checkpoint temperature. `kev.systemOne(req, { dateFacts: true })` is `KEV_DATE_FACTS=1`.
+
+A state over 65,536 tokens (`maxState`, the `<state>` token included) is refused before anything runs, with a
+`ContextOverflow` (a `RangeError`) that names its length and the limit and carries both as `stateTokens` and
+`maxState`. Since Kev 1.0 `kev.serve` answers such a request with a 422 instead of cutting the state without saying
+so. `loadKev(…, { truncateStates: true })` is `KEV_TRUNCATE_STATES=1`: the model reads the state's first 65,536
+tokens, and every response then carries `truncated` and `usage.state_tokens` / `usage.state_tokens_used`. Fitting
+the limit is not the same as being measured at that length. Kev-0.8B, 4B and 9B were trained on states of at most
+7,552 tokens and are validated to 8,192: at 16k tokens each one's accuracy on CUAD contracts already falls more than
+3 points below its own accuracy at 8k (95 % lower bound), so answers on longer states are outside what Kev measured.
 Weight files are cached in Cache Storage (`kev-web-v1`). In the demo page, `window.kev.systemOne(...)` works from
 the console, and `?verbose` logs where onnxruntime placed each node.
 

@@ -25,6 +25,8 @@ export interface Branch {
 export interface Encoding {
   state: number[];
   branches: Branch[];
+  /** the request's whole state, the <state> token included (state.length is what was kept) */
+  stateTokens: number;
   stateTruncated: boolean;
   /** total tokens across the packed sequence (state + all branches), as Kev reports usage.input_tokens */
   tokens: number;
@@ -43,14 +45,24 @@ export interface EncodeOptions {
   maxState?: number;
   /** max tokens of state + one branch (default SERVE_MAX_BRANCH = 73,728) */
   maxBranch?: number;
-  /** throw instead of truncating an over-long state */
+  /** throw a ContextOverflow instead of truncating an over-long state */
   strict?: boolean;
+}
+
+/** A request that does not encode within its context (kev.model.ContextOverflow; kev.serve's 422). When the state is
+ * what overflows, stateTokens (its count, the <state> token included) and maxState (the limit) say by how much. */
+export class ContextOverflow extends RangeError {
+  constructor(message: string, readonly stateTokens?: number, readonly maxState?: number) {
+    super(message);
+    this.name = "ContextOverflow";
+  }
 }
 
 export function encode(tok: TokenizerLike, rec: DecisionRecord, sp: SpecialTokens, o: EncodeOptions = {}): Encoding {
   const maxState = o.maxState ?? 65536, maxBranch = o.maxBranch ?? 73728;
   const stateTokens = userTokens(tok, rec.state);
-  if (o.strict && stateTokens.length + 1 > maxState) throw new RangeError(`state exceeds ${maxState} tokens: ${stateTokens.length + 1}`);
+  const n = stateTokens.length + 1;
+  if (o.strict && n > maxState) throw new ContextOverflow(`state exceeds ${maxState} tokens: ${n}`, n, maxState);
   const state = [sp.state, ...stateTokens.slice(0, maxState - 1)];
   const L = state.length;
   let tokens = L;
@@ -58,12 +70,12 @@ export function encode(tok: TokenizerLike, rec: DecisionRecord, sp: SpecialToken
     const instr = [sp.q, ...userTokens(tok, q.instr)];
     const spans = q.options.map((opt) => [sp.opt, ...userTokens(tok, opt), sp.opt_end]);
     const ids = [...instr, ...spans.flat(), sp.decide];
-    if (ids.length > maxBranch - L) throw new RangeError(`branch too long: ${ids.length}`);
+    if (ids.length > maxBranch - L) throw new ContextOverflow(`branch too long: ${ids.length}`);
     const opts: number[] = [];
     let cursor = instr.length;
     for (const s of spans) { cursor += s.length; opts.push(cursor - 1); }
     tokens += ids.length;
     return { ids, pos: ids.map((_, i) => L + i), decide: ids.length - 1, opts };
   });
-  return { state, branches, stateTruncated: stateTokens.length + 1 > maxState, tokens };
+  return { state, branches, stateTokens: n, stateTruncated: n > maxState, tokens };
 }

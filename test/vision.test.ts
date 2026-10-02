@@ -97,7 +97,7 @@ test("a request past the rotary tables is rejected before inference, image posit
     tokenizer: null as never, manifest, variant: "v" });
   // kev.serve's limits: state + one question <= 8,192 tokens, so a text request always fits the tables
   const S = 8100, B = 92;
-  const enc = { state: new Array(S).fill(7), branches: [{ ids: new Array(B).fill(7), pos: Array.from({ length: B }, (_, i) => S + i), decide: 0, opts: [1] }], stateTruncated: false, tokens: S + B };
+  const enc = { state: new Array(S).fill(7), branches: [{ ids: new Array(B).fill(7), pos: Array.from({ length: B }, (_, i) => S + i), decide: 0, opts: [1] }], stateTokens: S, stateTruncated: false, tokens: S + B };
   assert.equal(kev.lastPosition(enc), 8191);
   // a 768 x 768 image is 576 tokens but moves mRoPE on by 26 (vision_start, 24 merged rows, vision_end), past the tables
   const square = { width: 768, height: 768, data: new Uint8ClampedArray(768 * 768 * 4) };
