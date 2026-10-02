@@ -8,7 +8,7 @@ ort.env.wasm.wasmPaths = { wasm, mjs };
 ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(8, navigator.hardwareConcurrency || 4) : 1;
 
 export type WorkerRequest =
-  | { type: "load"; baseUrl: string; variant: string; device: "webgpu" | "wasm"; verbose?: boolean }
+  | { type: "load"; baseUrl: string; variant: string; device: "webgpu" | "wasm"; verbose?: boolean; temperature?: number }
   | { type: "run"; id: number; request: unknown; mode: "packed" | "separate" | "probs"; dateFacts?: boolean };
 
 export type WorkerResponse =
@@ -30,7 +30,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
       ort.env.logLevel = m.verbose ? "verbose" : "warning";
       const t0 = performance.now();
       kev = await loadKev(m.baseUrl, {
-        ort: ort as unknown as OrtModule, variant: m.variant, executionProviders: [m.device],
+        ort: ort as unknown as OrtModule, variant: m.variant, executionProviders: [m.device], temperature: m.temperature,
         onProgress: (p) => post({ type: "progress", ...p }),
         onPhase: (phase) => { if (phase !== "ready") post({ type: "phase", phase }); },
         ...(m.verbose ? { sessionOptions: { logSeverityLevel: 0 as const, logVerbosityLevel: 0 } } : {}),
@@ -45,7 +45,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
     } else if (m.type === "run") {
       if (!kev) throw new Error("model not loaded");
       const response = m.mode === "separate" ? await kev.systemOneSeparate(m.request, { dateFacts: m.dateFacts })
-        : m.mode === "probs" ? await kev.probs(m.request as DecisionRecord)   // raw probabilities for a rendered record (parity checks)
+        : m.mode === "probs" ? await kev.probs(m.request as DecisionRecord)   // probabilities for a rendered record (parity checks: load with ?temperature=1)
         : await kev.systemOne(m.request, { dateFacts: m.dateFacts, onAnswer: (qid, answer, index) => post({ type: "partial", id: m.id, qid, answer, index }) });
       post({ type: "result", id: m.id, response, timing: { ...kev.timing } });
     }

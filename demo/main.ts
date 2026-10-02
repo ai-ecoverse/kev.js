@@ -14,6 +14,7 @@ const MODEL_BASE = params.get("models") ?? (import.meta.env.VITE_MODEL_BASE as s
 const modelUrl = (name: string) => new URL(`${MODEL_BASE.replace(/\/$/, "")}/${name}`, location.href).href;
 const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
 const verbose = params.has("verbose");   // ?verbose: ORT logs, incl. node placement per EP
+const temperature = params.has("temperature") ? Number(params.get("temperature")) : undefined;   // ?temperature=1: raw logits (parity and accuracy checks)
 const store = { get: (k: string) => localStorage.getItem(`kev-web:${k}`), set: (k: string, v: string) => localStorage.setItem(`kev-web:${k}`, v) };
 
 let nextId = 1;
@@ -134,7 +135,7 @@ function load() {
   $("progress").classList.add("active");
   $("bar").style.width = "0%";
   status("Starting…");
-  send({ type: "load", baseUrl: modelUrl(model), variant, device: device.value as "webgpu" | "wasm", verbose });
+  send({ type: "load", baseUrl: modelUrl(model), variant, device: device.value as "webgpu" | "wasm", verbose, temperature });
 }
 $("load").onclick = load;
 

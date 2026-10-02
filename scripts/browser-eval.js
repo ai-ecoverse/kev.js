@@ -1,7 +1,9 @@
 // Browser parity + accuracy for one packaged model, run in the demo tab: fixture parity against PyTorch, the
 // 300-record reference set (accuracy, Brier, |dp| against fp32) and latency. Used as
-//   node scripts/cdp.mjs "$(cat scripts/browser-eval.js)('kev-4b', 'q8f32')"
-(async (model, variant) => {
+//   node scripts/cdp.mjs "$(cat scripts/browser-eval.js)('kev-4b', 'q8f32', '/@fs$PWD/fixtures')"
+// Open the demo with ?temperature=1: the fixtures and the reference set are raw logits (T = 1).
+// The third argument is where the dev server serves fixtures/ (Vite's /@fs/ prefix plus the checkout's absolute path).
+(async (model, variant, fixtures = "/@fs/Users/trieloff/Developer/ai-ecoverse/kev-web/fixtures") => {
   const deadline = Date.now() + 25 * 60 * 1000;
   const until = async (f, what) => { while (!f()) { if (Date.now() > deadline) throw new Error("timeout: " + what); await new Promise(r => setTimeout(r, 300)); } };
   await until(() => typeof window.kev === "object" && document.getElementById("variant").options.length > 0, "page init");
@@ -14,7 +16,7 @@
   await until(() => /Ready|Error/.test(document.getElementById("status").textContent), "load");
   const status = document.getElementById("status").textContent;
   if (/Error/.test(status)) return { status };
-  const get = async (f) => (await fetch(`/@fs/Users/trieloff/Developer/ai-ecoverse/kev-web/fixtures/${f}`)).json();
+  const get = async (f) => (await fetch(`${fixtures}/${f}`)).json();
   const am = a => a.indexOf(Math.max(...a));
   const fx = await get(`${model}.json`);
   let fw = 0, ff = 0, fn = 0;
