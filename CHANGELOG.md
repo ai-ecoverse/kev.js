@@ -1,3 +1,28 @@
+# [1.0.0](https://github.com/ai-ecoverse/kev.js/compare/v0.6.0...v1.0.0) (2026-10-02)
+
+
+* feat(api)!: refuse over-long states like kev.serve 1.0; truncateStates opts in ([4e1c4f7](https://github.com/ai-ecoverse/kev.js/commit/4e1c4f74b554412e72553c3d3b68be6850ce4ce7))
+
+
+### Bug Fixes
+
+* **demo:** ?temperature=1 for raw-logit parity checks; browser-eval takes the fixtures path ([9ebc77d](https://github.com/ai-ecoverse/kev.js/commit/9ebc77da2dc82efa2823cbb8500aed173e38923a))
+
+
+### Features
+
+* **export:** Kev 1.0 — Kev-9B v2 and both vision bundles on the 1.0 weights ([fbf2d28](https://github.com/ai-ecoverse/kev.js/commit/fbf2d28fe9c8a335f24826364a1c8fe65b5dad33))
+
+
+### BREAKING CHANGES
+
+* a request whose state is over maxState (default 65,536 tokens, the <state> token included)
+now rejects with a ContextOverflow instead of being silently truncated. Load with { truncateStates: true }
+for the old behaviour. KevOptions no longer accepts `strict`; truncateStates replaces it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Signed-off-by: Lars Trieloff <lars@trieloff.net>
+
 # [0.6.0](https://github.com/ai-ecoverse/kev.js/compare/v0.5.1...v0.6.0) (2026-09-26)
 
 
