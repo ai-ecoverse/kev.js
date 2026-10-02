@@ -28,8 +28,11 @@ export type Answer = NoulAnswer | ChoiceAnswer | ScoreAnswer;
 export interface SystemOneResponse {
   model: string;
   answers: Record<string, Answer>;
-  usage: { input_tokens: number; output_tokens: number };
+  /** state_tokens (the request's state) and state_tokens_used (what the model read), both counting the <state> token,
+   * only from a Kev loaded with truncateStates (kev.serve's KEV_TRUNCATE_STATES=1), as is `truncated` */
+  usage: { input_tokens: number; output_tokens: number; state_tokens?: number; state_tokens_used?: number };
   latency_ms: number;
+  truncated?: boolean;
 }
 
 /** Internal record consumed by encode(): rendered state and, per question, instruction + option texts. */

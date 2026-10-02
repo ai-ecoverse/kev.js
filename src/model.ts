@@ -5,7 +5,7 @@
 import type { InferenceSession, Tensor, TypedTensor } from "onnxruntime-common";
 import { Tokenizer } from "@huggingface/tokenizers";
 import { pyJsonDumps, toAnswers, toRecord, validate, withDateFacts, type Answer, type DecisionRecord, type SystemOneRequest, type SystemOneResponse } from "./api.ts";
-import { encode, type Encoding, type EncodeOptions, type SpecialTokens } from "./encode.ts";
+import { ContextOverflow, encode, type Encoding, type EncodeOptions, type SpecialTokens } from "./encode.ts";
 import { PointerHead } from "./head.ts";
 import { imageKey, preprocess, ropePositions, smartResize, visionInputs, type ImageLike, type VisionConfig } from "./vision.ts";
 
@@ -72,13 +72,16 @@ export interface KevManifest {
   vision?: VisionManifest;
 }
 
-export interface KevOptions extends EncodeOptions {
+export interface KevOptions extends Omit<EncodeOptions, "strict"> {
   /** Override the checkpoint temperature. Unset = manifest.temperature, else the night-2 fitted value, else 1 (raw). */
   temperature?: number;
   /** kev.serve's KEV_DATE_FACTS: append day counts between absolute dates in the state. Default false. */
   dateFacts?: boolean;
   /** states whose caches are kept for reuse (LRU). Default 4, like kev.serve. 0 disables. */
   stateCacheSize?: number;
+  /** kev.serve's KEV_TRUNCATE_STATES=1: read the first maxState tokens of a longer state instead of refusing it, and say
+   * on every response whether that happened (`truncated`, usage.state_tokens / state_tokens_used). Default false. */
+  truncateStates?: boolean;
 }
 
 /** Night-2 Qwen3.5 checkpoints: the same LoRA later gained a fitted T in head.pt (2026-09-21 calibration republish). */
@@ -137,7 +140,7 @@ export class Kev {
   private ort: OrtModule;
   private session: InferenceSession;
   private head: PointerHead;
-  private opts: Required<Pick<KevOptions, "stateCacheSize" | "dateFacts">> & EncodeOptions;
+  private opts: Required<Pick<KevOptions, "stateCacheSize" | "dateFacts" | "truncateStates" | "maxState" | "maxBranch">>;
   private cache = new Map<string, CachedState>();
   private queue: Promise<unknown> = Promise.resolve();
   private v: VariantManifest;
@@ -150,7 +153,8 @@ export class Kev {
     this.ort = a.ort; this.session = a.session; this.head = a.head; this.tokenizer = a.tokenizer; this.vision = a.vision;
     this.manifest = a.manifest; this.variant = a.variant; this.v = a.manifest.variants[a.variant];
     if (!this.v) throw new Error(`unknown variant ${a.variant}; have ${Object.keys(a.manifest.variants)}`);
-    this.opts = { stateCacheSize: 4, dateFacts: false, maxState: 65536, maxBranch: 73728, ...a.options };
+    const { stateCacheSize = 4, dateFacts = false, truncateStates = false, maxState = 65536, maxBranch = 73728 } = a.options ?? {};
+    this.opts = { stateCacheSize, dateFacts, truncateStates, maxState, maxBranch };
     this.head.temperature = a.options?.temperature ?? temperatureFor(a.manifest.run, a.manifest.temperature);
     this.imageInput = this.v.inputs.some((i) => i.name === "image_embeds");
     if (this.vision && !(this.imageInput && a.manifest.vision)) throw new Error(`variant ${a.variant} of ${a.manifest.name} takes no image_embeds`);
@@ -171,8 +175,19 @@ export class Kev {
     };
   }
 
+  /** kev.model.admit: a state over maxState tokens (the <state> token included) is refused with a ContextOverflow, as
+   * kev.serve's 422, unless truncateStates; a question whose row is over maxBranch is refused either way. */
   encode(rec: DecisionRecord): Encoding {
-    return encode(this.tokenizer, rec, this.manifest.special, this.opts);
+    const { maxState, maxBranch, truncateStates } = this.opts;
+    try {
+      return encode(this.tokenizer, rec, this.manifest.special, { maxState, maxBranch, strict: !truncateStates });
+    } catch (e) {
+      if (!(e instanceof ContextOverflow) || e.maxState == null) throw e;
+      const n = (x: number) => x.toLocaleString("en-US");
+      throw new ContextOverflow(`state is ${n(e.stateTokens!)} tokens, over the ${n(e.maxState)}-token limit (the <state> token included): `
+        + `shorten the document or split it across requests; or load with { truncateStates: true } to read only its first ${n(e.maxState)} tokens `
+        + "(responses then say truncated: true)", e.stateTokens, e.maxState);
+    }
   }
 
   private serial<T>(fn: () => Promise<T>): Promise<T> {
@@ -348,7 +363,12 @@ export class Kev {
     const answers = toAnswers(probs, meta);
     const outputTokens = this.tokenizer.encode(pyJsonDumps(answers), { add_special_tokens: false }).ids.length;
     const inputTokens = enc.tokens + (req.image ? this.timing.imageTokens + 2 : 0);
-    return { model: req.model ?? "kev-latest", answers, usage: { input_tokens: inputTokens, output_tokens: outputTokens }, latency_ms: Math.round(latency * 10) / 10 };
+    const res: SystemOneResponse = { model: req.model ?? "kev-latest", answers, usage: { input_tokens: inputTokens, output_tokens: outputTokens }, latency_ms: Math.round(latency * 10) / 10 };
+    if (this.opts.truncateStates) {   // kev.serve's Server._body: a server that may truncate says on every response whether it did
+      res.usage.state_tokens = enc.stateTokens; res.usage.state_tokens_used = enc.state.length;
+      res.truncated = enc.stateTruncated;
+    }
+    return res;
   }
 
   /** POST /v1/systemone/separate: each question in its own request against the same state. */
@@ -359,6 +379,10 @@ export class Kev {
       const r = await this.systemOne({ ...req, questions: { [id]: q } }, opts);
       Object.assign(merged.answers, r.answers);
       merged.usage.input_tokens += r.usage.input_tokens; merged.latency_ms += r.latency_ms;
+      if (r.truncated !== undefined) {   // kev.serve's truncation_marks: every part read the same state tokens
+        merged.truncated = r.truncated;
+        merged.usage.state_tokens = r.usage.state_tokens; merged.usage.state_tokens_used = r.usage.state_tokens_used;
+      }
     }
     merged.usage.output_tokens = this.tokenizer.encode(pyJsonDumps(merged.answers), { add_special_tokens: false }).ids.length;
     merged.latency_ms = Math.round(merged.latency_ms * 10) / 10;

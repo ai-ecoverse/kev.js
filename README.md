@@ -20,12 +20,12 @@ const res = await kev.systemOne({
     urgency: { type: "score", instructions: "How urgent is this ticket?", criteria: ["can wait", "this week", "today"] },
   },
 });
-// Kev-0.8B (kev-0.8b@2256796), as served (T ≈ 2.41):
-res.answers.billing.noul;    // 0.9102 probability of yes, rounded to 4 places like kev.serve
-res.answers.urgency.score;   // 1.482  expected level (0 "can wait" … 2 "today"); "today" has 0.5724
+// Kev-0.8B (kev-0.8b@9a45d25, Kev 1.0), as served (T ≈ 2.35):
+res.answers.billing.noul;    // 0.9005 probability of yes, rounded to 4 places like kev.serve
+res.answers.urgency.score;   // 1.226  expected level (0 "can wait" … 2 "today"); "today" has 0.4369
 ```
 
-The pointer head applies the checkpoint's fitted temperature by default (0.8B 2.41, 4B 2.14, 9B 2.30), matching `kev.serve`. It never changes the argmax. Pass `{ temperature: 1 }` to `loadKev` for the raw logits. `{ dateFacts: true }` appends day counts between absolute dates in the state (`KEV_DATE_FACTS=1`).
+The pointer head applies the checkpoint's fitted temperature by default (0.8B 2.35, 4B 2.41, 9B 2.19), matching `kev.serve`. It never changes the argmax. Pass `{ temperature: 1 }` to `loadKev` for the raw logits. `{ dateFacts: true }` appends day counts between absolute dates in the state (`KEV_DATE_FACTS=1`).
 
 ## Results
 
@@ -35,10 +35,10 @@ reference. The 300 records are held-out transfer-v4 development data (sources Ke
 
 | Model (pinned checkpoint) | Download | Accuracy, browser / reference | Brier, browser / reference | Mean / max \|Δp\| (300 records) | Answers changed | 3-question request |
 |---|---|---|---|---|---|---|
-| Kev-0.8B `q8f32` (`kev-0.8b@2256796`) | 822 MB | 0.660 / 0.657 | 0.475 / 0.472 | 0.0063 / 0.085 | 3 / 300 | 108 ms |
-| Kev-0.8B `q8` (int8, fp16 activations) | 788 MB | 0.663 / 0.657 | 0.476 / 0.472 | 0.0073 / 0.087 | 4 / 300 | 115 ms |
-| Kev-4B `q8f32` (`kev-4b@4bc64c6`) | 4.7 GB | 0.773 / 0.773 | 0.324 / 0.324 | 0.0028 / 0.075 | 0 / 300 | 360 ms |
-| Kev-9B `q8f32` (`kev-9b@442e597`) | 8.8 GB | 0.800 / 0.800 | 0.318 / 0.318 | 0.0033 / 0.160 | 0 / 300 | 570 ms |
+| Kev-0.8B `q8f32` (`kev-0.8b@9a45d25`) | 838 MB | 0.640 / 0.640 | 0.492 / 0.491 | 0.0056 / 0.036 | 0 / 300 | 108 ms |
+| Kev-0.8B `q8` (int8, fp16 activations) | 805 MB | 0.640 / 0.640 | 0.492 / 0.491 | 0.0068 / 0.036 | 0 / 300 | 115 ms |
+| Kev-4B `q8f32` (`kev-4b@139fdd9`) | 4.7 GB | 0.800 / 0.807 | 0.281 / 0.281 | 0.0032 / 0.050 | 3 / 300 | 360 ms |
+| Kev-9B v2 `q8f32` (`kev-9b@b5d8c18`) | 8.8 GB | 0.807 / 0.810 | 0.312 / 0.311 | 0.0037 / 0.089 | 1 / 300 | 570 ms |
 
 Kev's own PyTorch server takes 329 ms (Kev-0.8B), 779 ms (Kev-4B) and about 2 s (Kev-9B) for a comparable request
 on an M5 with MPS, which has no fast DeltaNet kernels. Kev-9B needs a GPU with roughly 9 GB free for its weights,
@@ -55,8 +55,8 @@ calibrated probability that is disqualifying. `export/build.sh` lists the varian
 
 ### Checkpoint revisions
 
-Kev's checkpoints are republished under the same Hub ids (all three were updated on 2026-09-21), so everything
-here is pinned to a commit. `kev_web_export.pin` resolves `jaredpalmer/kev-4b` to `jaredpalmer/kev-4b@<sha>`. The
+Kev's checkpoints are republished under the same Hub ids (updated on 2026-09-21, 2026-09-24 and 2026-09-30, then
+tagged `v1.0` for Kev 1.0), so everything here is pinned to a commit. `kev_web_export.pin` resolves `jaredpalmer/kev-4b` to `jaredpalmer/kev-4b@<sha>`. The
 merge, the fixtures and the reference sets record it, and `package.py` refuses to combine fixtures and weights
 from different commits. Each bundle's `manifest.json` names its revision (`run`), and its files live under
 `r-<sha>/`. Publishing a new checkpoint therefore never overwrites a file an older manifest points at: the switch is
@@ -71,10 +71,13 @@ limits (state up to 65,536 tokens, state plus one question at most 73,728) alway
 in merged patches plus 2 (26 for 768 × 768, up to 290 for a 64 × 9216 strip), so a near-limit state with an image can
 be rejected. `package.py --update <bundle>` adds both fields to an existing manifest without touching its files.
 
-The published bundles were exported from the night-2 LoRA (`kev-0.8b@2256796`, `kev-4b@4bc64c6`, `kev-9b@442e597`).
-Hub `main` later added the fitted temperature to `head.pt` without changing the adapter. The runtime applies those
-temperatures for those revisions even when an older `manifest.json` does not yet name `temperature`; re-running
-`build_model.sh` writes it into the manifest from `head.pt`.
+The published bundles are [Kev 1.0](https://github.com/jaredpalmer/kev/releases/tag/kev-1.0), pinned to the
+release's weights revisions: `kev-0.8b@9a45d25` (documents and skills, round 15), `kev-4b@139fdd9` (round 10) and
+`kev-9b@b5d8c18` (Kev-9B v2). Each repo's `v1.0` tag points at a later commit that changed only the model card, so it
+holds the same bytes. Kev-27B, the fourth 1.0 model, is a 51 GB full-weight Qwen3.8 checkpoint and is not exported.
+Bundles exported earlier from the night-2 LoRA (`kev-0.8b@2256796`, `kev-4b@4bc64c6`, `kev-9b@442e597`) predate the
+fitted temperature in `head.pt`; the runtime still applies those temperatures for those revisions when an older
+`manifest.json` does not name `temperature`.
 
 ## Images
 
@@ -96,8 +99,8 @@ const res = await kev.systemOne({
 kev.timing;   // { preprocess, vision, state, branches, imageTokens, cached } of the last request, in ms
 ```
 
-The vision bundles are built locally and are not published yet. The demo lists `kev-4b-vision` and has image presets,
-a file picker and drag and drop.
+Both vision bundles are published next to the text bundles. The demo lists them and has image presets, a file picker
+and drag and drop.
 
 Two eval sets measure it, each in four conditions: the image, a text caption holding the same facts (the text upper
 bound), the context alone, and another image of the same family. [vision-v1](eval/vision-v1) (41 images, 106
@@ -107,13 +110,13 @@ interval from resampling images; PyTorch fp32 on MPS; raw logits.
 
 | Model | Set | Image | Caption | Context only | Other image | Chance |
 |---|---|---|---|---|---|---|
-| Kev-4B `kev-4b@4bc64c6` | v1 | 0.981 [0.954, 1.000] | 1.000 | 0.425 | 0.208 | 0.360 |
-| | v2 | 0.875 [0.822, 0.927] | 0.883 | 0.320 | 0.234 | 0.320 |
-| Kev-0.8B `kev-0.8b@2256796` | v1 | 0.906 [0.844, 0.955] | 0.915 | 0.330 | 0.245 | 0.360 |
-| | v2 | 0.672 [0.583, 0.756] | 0.742 | 0.320 | 0.242 | 0.320 |
+| Kev-4B `kev-4b@139fdd9` | v1 | 0.991 [0.971, 1.000] | 1.000 | 0.292 | 0.208 | 0.360 |
+| | v2 | 0.898 [0.847, 0.945] | 0.914 | 0.305 | 0.242 | 0.320 |
+| Kev-0.8B `kev-0.8b@9a45d25` | v1 | 0.906 [0.845, 0.961] | 0.906 | 0.321 | 0.236 | 0.360 |
+| | v2 | 0.648 [0.551, 0.738] | 0.750 | 0.344 | 0.258 | 0.320 |
 
 Kev-4B reads an image about as well as the caption that describes it. Swapping in another image makes the answers
-worse than chance, so they follow the image. What fails is counting: 13 of Kev-4B's 16 v2 errors are counting
+worse than chance, so they follow the image. What fails is counting: 11 of Kev-4B's 13 v2 errors are counting
 questions. Each eval set's README breaks the results down by type and family.
 
 In the browser (Chrome, WebGPU on an Apple M4 Max, `q8f32` decoder and the tower with fp16 weights computing in fp32),
@@ -121,29 +124,28 @@ against the fp32 PyTorch reference (`fixtures/<model>-vision.json`, raw logits, 
 
 | Model | Set | Accuracy, browser / PyTorch | Mean / max \|Δp\| | Answers changed (reference margin) | Vision / decoder, median |
 |---|---|---|---|---|---|
-| Kev-4B | v1 | 0.972 / 0.981 | 0.0009 / 0.035 | 1 / 106 (0.007) | 142 / 574 ms |
-| | v2 | 0.875 / 0.875 | 0.0036 / 0.059 | 0 / 128 | 549 / 1083 ms |
-| Kev-0.8B | v1 | 0.906 / 0.906 | 0.0022 / 0.020 | 0 / 106 | 49 / 150 ms |
-| | v2 | 0.664 / 0.672 | 0.0043 / 0.025 | 1 / 128 (0.006) | 217 / 273 ms |
+| Kev-4B | v1 | 0.991 / 0.991 | 0.0004 / 0.010 | 0 / 106 | 134 / 551 ms |
+| | v2 | 0.891 / 0.898 | 0.0034 / 0.146 | 1 / 128 (0.004) | 488 / 1027 ms |
+| Kev-0.8B | v1 | 0.896 / 0.906 | 0.0029 / 0.034 | 3 / 106 (0.011, 0.003, 0.003) | 45 / 141 ms |
+| | v2 | 0.648 / 0.648 | 0.0051 / 0.029 | 0 / 128 | 189 / 252 ms |
 
 v1 images become 108-550 image tokens (median 196) and v2 images 400-560 (median 540). The decoder time covers the
-state with the image tokens plus one to four questions. Both answers that changed were near-ties in the reference. The same
-bundles on onnxruntime CPU (`kev_web_export.vision_parity`): Kev-4B v1 0.0024 / 0.075 with 2 near-tie changes
-(margins 0.007 and 0.044), v2 0.0053 / 0.142 with none; Kev-0.8B v1 0.0035 / 0.043, v2 0.0081 / 0.065 with 2 near-tie
-changes (0.021, 0.006). The fp32 ONNX graphs match PyTorch to 1.4e-4 (4B v1), 1.9e-4 (4B v2), 3.5e-5 and 1.1e-4
-(0.8B).
+state with the image tokens plus one to four questions. Every answer that changed was a near-tie in the reference; Kev-4B's largest deviation (0.146,
+bars-0) is the one that changed. The same bundles on onnxruntime CPU (`kev_web_export.vision_parity`): Kev-4B v1
+0.0010 / 0.041 with no changes, v2 0.0046 / 0.097 with 2 near-tie changes (margins 0.004 and 0.008); Kev-0.8B v1
+0.0038 / 0.054, v2 0.0080 / 0.056, with one near-tie change each (0.011, 0.016). The fp32 ONNX vision towers match
+PyTorch to 4.3e-4 at most per value (4B) and 3.1e-4 (0.8B).
 
 The text path does not move. The decoder of a vision bundle is the published `q8f32` graph with one extra input,
 `image_embeds`, spliced in (`kev_web_export.splice`). It uses the same weight files, hard-linked, and a text request
 feeds it one zero row that no token selects. The text fixtures give the published figures on both bundles: 4B max
-\|Δp\| 0.0625 with 1 near-tie change out of 29, 0.8B 0.0967 with none out of 49. On the fp32 graphs, spliced and
-unspliced both match PyTorch to 1.3e-4 (4B).
+\|Δp\| 0.032 with no change out of 29, 0.8B 0.026 with none out of 49.
 
 The tower adds 668 MB to Kev-4B's download and 202 MB to Kev-0.8B's. Images are resized the way Qwen's processor does
 it, to multiples of 32 pixels and at most 768 × 768 = 589,824 pixels (`max_pixels`, about 576 image tokens); the JS
 port matches Qwen's `pixel_values` to a mean difference of 2.3e-5 per value (one uint8 step is 7.8e-3). One image per request. Images need a float32-io variant
 (`q8f32`), because the tower's output is fed to the decoder as is. Nothing was trained for this, so images carry
-Kev's text calibration: Kev-4B's v1 Brier is 0.021, and 0.173 on v2.
+Kev's text calibration: Kev-4B's v1 Brier is 0.010, and 0.159 on v2.
 
 Build a vision bundle from a merged build directory (`build_model.sh` output) and its published `q8f32` graph:
 
@@ -167,8 +169,9 @@ uv run python -m kev_web_export.package --build build/kev-4b --out ../public/mod
 ## How It Works
 
 Kev is a Qwen3.5 base, a rank-16 LoRA and a small pointer head. The head scores each option's `</opt>` hidden state
-against the question's `<decide>` hidden state, then divides the logits by a temperature fitted on that checkpoint's
-in-distribution development rows (about 2.1–2.4, stored in `head.pt` and written into `manifest.json` on export).
+against the question's `<decide>` hidden state, then divides the logits by a temperature fitted for that checkpoint
+(2.19–2.41 for Kev 1.0: held-out items of the training data for 0.8B and 4B, held-out datasets for 9B; stored in
+`head.pt` and written into `manifest.json` on export).
 Nothing is generated, so one forward pass is the whole job.
 
 Qwen3.5 mixes Gated DeltaNet (recurrent) layers with full attention, so Kev serves hybrid models in rows. The state
@@ -239,6 +242,15 @@ WASM fallback runs single-threaded; WebGPU is unaffected.
 `kev.systemOne(req, { onAnswer })` reports each question as it finishes, so a UI can fill answers in as they land.
 `kev.systemOneSeparate()` answers each question in its own pass. `kev.probs(record)` returns probabilities after the
 checkpoint temperature. `kev.systemOne(req, { dateFacts: true })` is `KEV_DATE_FACTS=1`.
+
+A state over 65,536 tokens (`maxState`, the `<state>` token included) is refused before anything runs, with a
+`ContextOverflow` (a `RangeError`) that names its length and the limit and carries both as `stateTokens` and
+`maxState`. Since Kev 1.0 `kev.serve` answers such a request with a 422 instead of cutting the state without saying
+so. `loadKev(…, { truncateStates: true })` is `KEV_TRUNCATE_STATES=1`: the model reads the state's first 65,536
+tokens, and every response then carries `truncated` and `usage.state_tokens` / `usage.state_tokens_used`. Fitting
+the limit is not the same as being measured at that length. Kev-0.8B, 4B and 9B were trained on states of at most
+7,552 tokens and are validated to 8,192: at 16k tokens each one's accuracy on CUAD contracts already falls more than
+3 points below its own accuracy at 8k (95 % lower bound), so answers on longer states are outside what Kev measured.
 Weight files are cached in Cache Storage (`kev-web-v1`). In the demo page, `window.kev.systemOne(...)` works from
 the console, and `?verbose` logs where onnxruntime placed each node.
 
@@ -303,7 +315,7 @@ real browser: `node scripts/cdp.mjs '<expression>'` evaluates in the tab (`MATCH
 - JSON parsing loses two things Kev's Python server keeps. `1.0` arrives as `1` and is rendered `1`, where Python
   renders `1.0`. Object keys that look like integers (`"10"`, `"2"`) are iterated in numeric order, which can
   reorder Choice options with numeric names.
-- The first load downloads 822 MB for Kev-0.8B, or 4.7 GB for Kev-4B, and the files stay in Cache Storage. Serve
+- The first load downloads 838 MB for Kev-0.8B, or 4.7 GB for Kev-4B, and the files stay in Cache Storage. Serve
   them from a fast origin: over a tunnel at ~1.2 MB/s, Kev-0.8B takes 11 minutes. More parallel requests do not
   help on a bandwidth-limited link (measured: 1.2 MB/s with one stream, 0.75 MB/s across six), so the loader
   fetches 2 files at a time.

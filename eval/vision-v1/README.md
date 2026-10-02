@@ -43,21 +43,21 @@ a 95% interval from resampling images; Brier is summed over options (uniform = 0
 
 | Model (pinned) | Condition | Accuracy | Brier | Brier @T | NLL | Mean top p | Flatness | Flatness @T |
 |---|---|---|---|---|---|---|---|---|
-| Kev-4B `kev-4b@4bc64c6` (T = 2.14) | image | 0.981 [0.954, 1.000] | 0.021 | 0.031 | 0.036 | 0.98 | 0.03 | 0.15 |
-| | caption | 1.000 | 0.001 | 0.004 | 0.003 | 1.00 | 0.01 | 0.10 |
-| | omitted | 0.425 [0.360, 0.491] | 0.799 | 0.712 | 1.472 | 0.60 | 0.75 | 0.91 |
-| | shuffled | 0.208 [0.136, 0.284] | 1.468 | 1.389 | 7.198 | 0.92 | 0.13 | 0.26 |
-| Kev-0.8B `kev-0.8b@2256796` (T = 2.41) | image | 0.906 [0.844, 0.955] | 0.126 | 0.146 | 0.244 | 0.90 | 0.18 | 0.44 |
-| | caption | 0.915 [0.857, 0.963] | 0.119 | 0.141 | 0.213 | 0.94 | 0.15 | 0.46 |
-| | omitted | 0.330 [0.235, 0.430] | 0.837 | 0.705 | 1.519 | 0.65 | 0.69 | 0.90 |
-| | shuffled | 0.245 [0.168, 0.327] | 1.333 | 1.148 | 4.581 | 0.86 | 0.25 | 0.52 |
+| Kev-4B `kev-4b@139fdd9` (T = 2.41) | image | 0.991 [0.971, 1.000] | 0.010 | 0.023 | 0.020 | 0.99 | 0.02 | 0.15 |
+| | caption | 1.000 | 0.002 | 0.012 | 0.007 | 0.99 | 0.02 | 0.17 |
+| | omitted | 0.292 [0.231, 0.359] | 0.817 | 0.693 | 1.442 | 0.61 | 0.78 | 0.94 |
+| | shuffled | 0.208 [0.131, 0.294] | 1.519 | 1.405 | 8.622 | 0.96 | 0.09 | 0.24 |
+| Kev-0.8B `kev-0.8b@9a45d25` (T = 2.35) | image | 0.906 [0.845, 0.961] | 0.125 | 0.159 | 0.243 | 0.89 | 0.22 | 0.50 |
+| | caption | 0.906 [0.833, 0.964] | 0.123 | 0.180 | 0.224 | 0.90 | 0.24 | 0.56 |
+| | omitted | 0.321 [0.230, 0.410] | 0.812 | 0.699 | 1.466 | 0.61 | 0.74 | 0.91 |
+| | shuffled | 0.236 [0.162, 0.314] | 1.337 | 1.107 | 4.063 | 0.86 | 0.27 | 0.56 |
 
-Pinned runs: `jaredpalmer/kev-4b@4bc64c6b4c4881148661ffb823ce21fcfdc79a0e` on `Qwen/Qwen3.5-4B-Base@1001bb4d826a52d1f399e183466143f4da7b741b`,
-`jaredpalmer/kev-0.8b@225679690cdd1de6fceb1258b1bddf61c493cee9` on `Qwen/Qwen3.5-0.8B-Base@dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68`.
+Pinned runs (Kev 1.0): `jaredpalmer/kev-4b@139fdd94f1b6a6ad80cc15e08fcb99cac885a101` on `Qwen/Qwen3.5-4B-Base@1001bb4d826a52d1f399e183466143f4da7b741b`,
+`jaredpalmer/kev-0.8b@9a45d25eb2ab761841196625383fa1dff0e56c1e` on `Qwen/Qwen3.5-0.8B-Base@dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68`.
 Per-question logits are in `results/<model>/rows.json`, the summary with per-type and per-family accuracy in
 `results/<model>/report.json`.
 
 What this set does and does not show: the questions are easy for Qwen3.5's own vision (the stock base describes the
 chart, sign-in error and traffic light correctly through the same splice), so it tests whether Kev's text-only
-fine-tune still reads the image features, not how well it reasons over hard images. Kev-4B's remaining errors are two
-counting `score` questions; Kev-0.8B's are mostly counting (shapes 0.71, `score` 0.57 overall).
+fine-tune still reads the image features, not how well it reasons over hard images. Kev-4B's one remaining error is a
+counting `score` question (shapes-5, one short); Kev-0.8B's are mostly counting (shapes 0.71, `score` 0.57 overall).
