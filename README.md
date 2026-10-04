@@ -332,6 +332,10 @@ real browser: `node scripts/cdp.mjs '<expression>'` evaluates in the tab (`MATCH
 - [jev-omni.js](https://github.com/ai-ecoverse/jev-omni.js): the Gemma 4 12B Jev-Omni decision classifier on WebGPU.
 - [decision-vision-bench](https://github.com/ai-ecoverse/decision-vision-bench): Kev vision, cua-s1-4b-0.2 multimodal
   and Jev-Omni on one mixed image decision set, with this repo's vision-v1 and vision-v2 questions.
+- [kev-ministral demo](https://ai-ecoverse.github.io/kev.js/ministral.html) (`demo/ministral/`): Kev's recipe on
+  Ministral-3-3B-Base, where one 6.6 GB download serves decisions with a screenshot, image description and text
+  completion. The decision LoRA sits in the decoder as gated branches, so generation runs on the stock base.
+  Weights: [ai-ecoverse/kev-ministral](https://huggingface.co/ai-ecoverse/kev-ministral).
 
 ## License
 

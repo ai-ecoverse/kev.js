@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kev-ministral — one download, three task shapes</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#2a2f3a; --text:#e6e8ec; --dim:#9aa3b2; --acc:#7aa2ff; --ok:#3ecf8e; --bad:#ff6b6b; --bar:#2f3b57; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:18px 24px; border-bottom:1px solid var(--line); display:flex; gap:24px; align-items:center; flex-wrap:wrap; }
+  h1 { font-size:18px; margin:0; } h1 small { color:var(--dim); font-weight:400; }
+  .pill { font-size:12px; color:var(--dim); border:1px solid var(--line); border-radius:999px; padding:3px 10px; }
+  main { padding:20px 24px; max-width:1280px; margin:0 auto; }
+  button { background:var(--acc); color:#0b1020; border:0; border-radius:8px; padding:8px 14px; font-weight:600; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--text); border:1px solid var(--line); }
+  button:disabled { opacity:.45; cursor:default; }
+  textarea, select, input[type=text], input[type=number] { width:100%; background:#0c0e12; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  textarea { resize:vertical; }
+  label { display:block; color:var(--dim); font-size:12px; margin:10px 0 4px; }
+  .tabs { display:flex; gap:6px; margin:4px 0 16px; }
+  .tab { background:transparent; color:var(--dim); border:1px solid var(--line); }
+  .tab.on { background:var(--panel); color:var(--text); border-color:var(--acc); }
+  .grid { display:grid; grid-template-columns: minmax(0,1.1fr) minmax(0,1fr); gap:18px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .shot { width:100%; border-radius:8px; border:1px solid var(--line); display:block; background:#000; min-height:60px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .bars div.b { display:grid; grid-template-columns: 210px 1fr 58px; gap:8px; align-items:center; margin:3px 0; font:12px ui-monospace, Menlo, monospace; }
+  .track { background:#0c0e12; border-radius:4px; height:16px; overflow:hidden; }
+  .fill { background:var(--bar); height:100%; }
+  .b.top .fill { background:var(--acc); }
+  .b.gold .k::after { content:" ✓ gold"; color:var(--ok); }
+  .k { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .out { white-space:pre-wrap; font:13px/1.5 ui-monospace, Menlo, monospace; background:#0c0e12; border:1px solid var(--line); border-radius:8px; padding:12px; min-height:140px; }
+  .out .p { color:var(--dim); }
+  .meta { color:var(--dim); font-size:12px; margin-top:8px; }
+  .verdict.ok { color:var(--ok); } .verdict.bad { color:var(--bad); }
+  #progress { min-width:320px; flex:1; }
+  .prog { font-size:12px; color:var(--dim); display:grid; grid-template-columns: 230px 1fr 90px; gap:8px; align-items:center; }
+  .prog .track { height:8px; }
+  .prog .fill { background:var(--acc); }
+  .hidden { display:none; }
+  .note { color:var(--dim); font-size:12px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } .bars div.b { grid-template-columns: 140px 1fr 50px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>kev-ministral <small>· Ministral-3-3B-Base + Kev decision head, in your browser</small></h1>
+  <span class="pill" id="status">not loaded</span>
+  <span class="note"><a style="color:var(--acc)" href="./">kev.js</a> · <a style="color:var(--acc)" href="https://huggingface.co/ai-ecoverse/kev-ministral">model card</a> · <a style="color:var(--acc)" href="https://github.com/ai-ecoverse/kev.js/tree/main/demo/ministral">code</a></span>
+  <button id="load">Load model (6.6 GB, cached after first load)</button>
+  <div id="progress"></div>
+</header>
+<main>
+  <p class="note">One download, one WebGPU load, three task shapes: the stock base model (int8) generates text, and the same
+  decoder computes Kev decisions when its built-in LoRA branches are switched on (<code>lora_scale = 1</code>) and a pointer head
+  reads the hidden states. Decisions: Mind2Web unseen websites 69.8% in this browser build (PyTorch 69.0%). Needs Chrome
+  with WebGPU and ~9 GB of free memory.</p>
+  <div class="tabs">
+    <button class="tab on" data-tab="decide">Decide (screenshot + question)</button>
+    <button class="tab" data-tab="describe">Describe an image</button>
+    <button class="tab" data-tab="complete">Complete / summarize text</button>
+  </div>
+
+  <section id="tab-decide" class="grid">
+    <div class="panel">
+      <div class="row">
+        <div style="flex:1"><label>Example (live pages captured 2026-10-04, and held-out game runs: none seen in training)</label><select id="sample"></select></div>
+        <div><label>&nbsp;</label><button class="ghost" id="upload-btn">Use my screenshot…</button><input type="file" id="upload" accept="image/*" class="hidden"></div>
+      </div>
+      <label>Screenshot <span class="note">(boxed controls are labelled with their refs)</span></label>
+      <img id="shot" class="shot" alt="" crossorigin="anonymous">
+      <div class="row"><label style="margin:6px 0"><input type="checkbox" id="noimg"> decide without the screenshot</label></div>
+    </div>
+    <div class="panel">
+      <label>State (what webrunner tells System 1: goal, history, page controls)</label>
+      <textarea id="state" rows="9"></textarea>
+      <label>Question</label>
+      <input type="text" id="qtext">
+      <label>Options — one per line, <code>key: description</code></label>
+      <textarea id="opts" rows="7"></textarea>
+      <div class="row" style="margin-top:12px"><button id="decide" disabled>Decide</button><span class="meta" id="dmeta"></span></div>
+      <div id="verdict" class="verdict meta"></div>
+      <div class="bars" id="bars" style="margin-top:10px"></div>
+    </div>
+  </section>
+
+  <section id="tab-describe" class="grid hidden">
+    <div class="panel">
+      <div class="row">
+        <div style="flex:1"><label>Image</label><select id="dsample"></select></div>
+        <div><label>&nbsp;</label><button class="ghost" id="dupload-btn">Use my image…</button><input type="file" id="dupload" accept="image/*" class="hidden"></div>
+      </div>
+      <img id="dshot" class="shot" alt="" crossorigin="anonymous" style="margin-top:10px">
+    </div>
+    <div class="panel">
+      <label>Prompt (the image goes where <code>[IMG]</code> is; this is a base model, so start the sentence you want finished)</label>
+      <textarea id="dprompt" rows="3">[IMG]
+This screenshot shows a web page with</textarea>
+      <div class="row">
+        <div style="width:120px"><label>Max tokens</label><input type="number" id="dmax" value="80" min="1" max="400"></div>
+        <div style="width:120px"><label>Temperature</label><input type="number" id="dtemp" value="0" min="0" max="2" step="0.1"></div>
+        <div><label>&nbsp;</label><button id="describe" disabled>Generate</button></div>
+      </div>
+      <label>Output</label>
+      <div class="out" id="dout"></div>
+      <div class="meta" id="dgmeta"></div>
+    </div>
+  </section>
+
+  <section id="tab-complete" class="grid hidden">
+    <div class="panel">
+      <label>Preset</label>
+      <select id="preset"></select>
+      <label>Prompt</label>
+      <textarea id="cprompt" rows="12"></textarea>
+      <div class="row">
+        <div style="width:120px"><label>Max tokens</label><input type="number" id="cmax" value="80" min="1" max="600"></div>
+        <div style="width:120px"><label>Temperature</label><input type="number" id="ctemp" value="0" min="0" max="2" step="0.1"></div>
+        <div><label>&nbsp;</label><button id="complete" disabled>Generate</button></div>
+      </div>
+    </div>
+    <div class="panel">
+      <label>Output <span class="note">(stock base model, decision LoRA switched off: identical to PyTorch Base for greedy decoding)</span></label>
+      <div class="out" id="cout"></div>
+      <div class="meta" id="cmeta"></div>
+    </div>
+  </section>
+</main>
+<script type="module" src="./ministral/demo.ts"></script>
+</body>
+</html>
