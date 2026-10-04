@@ -1,6 +1,6 @@
 // Ministral 3 / Pixtral image preprocessing (port of transformers' PixtralImageProcessor + PixtralProcessor):
-//   target size: scale down to fit longest_edge 1540 if needed, then round each side up to a whole number of 14 px
-//   patches; bicubic resize (Pillow's kernel, a = -0.5, antialiased, uint8 after each pass: jev-omni.js / cua-s1.js);
+//   target size: scale down to fit longest_edge 1540 if needed, then round each side up to a multiple of 28 px (14 px
+//   patches x the 2 x 2 merge, as transformers' processor does: 90 x 90 -> 112 x 112, 1024 x 576 -> 1036 x 588); bicubic resize (Pillow's kernel, a = -0.5, antialiased, uint8 after each pass: jev-omni.js / cua-s1.js);
 //   rescale 1/255; normalize with the CLIP mean/std; CHW float32.
 //   tokens: one [IMG] per 2 x 2 merged patch, row by row, [IMG_BREAK] after each row but the last, which ends in
 //   [IMG_END].
@@ -13,7 +13,8 @@ const MEAN = [0.48145466, 0.4578275, 0.40821073], STD = [0.26862954, 0.26130258,
 export function targetSize(h: number, w: number): [number, number] {
   const ratio = Math.max(h / LONGEST, w / LONGEST);
   if (ratio > 1) { h = Math.floor(h / ratio); w = Math.floor(w / ratio); }
-  return [Math.floor((h - 1) / PATCH + 1) * PATCH, Math.floor((w - 1) / PATCH + 1) * PATCH];
+  const unit = PATCH * MERGE;   // an odd patch count would not merge 2 x 2: features and [IMG] tokens would disagree
+  return [Math.ceil(h / unit) * unit, Math.ceil(w / unit) * unit];
 }
 
 const cubic = (x: number, a = -0.5) => {

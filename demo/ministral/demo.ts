@@ -1,11 +1,14 @@
 // Demo page: three task shapes on one KevMinistral instance in a worker.
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
-// Weights and example screenshots come from Hugging Face, pinned to a commit so Cache Storage never mixes revisions.
+// Weights and example screenshots come from Hugging Face, each pinned to a commit: the weights' pin keys Cache Storage,
+// so new examples (their own pin) never make anyone download the 6.6 GB again.
 // ?base=<url> points at another bundle (e.g. a local one), ?samples=<url> at another samples.json.
-const REPO = "https://huggingface.co/ai-ecoverse/kev-ministral/resolve/79c6ec85c85610d33de7826840adf086ae7e30a8";
+const HF = "https://huggingface.co/ai-ecoverse/kev-ministral/resolve";
+const WEIGHTS_REV = "79c6ec85c85610d33de7826840adf086ae7e30a8";
+const SAMPLES_REV = "72a50691505c4c1ea97e2f671e5f99f916fdc2b5";
 const params = new URLSearchParams(location.search);
-const BASE = params.get("base") ?? `${REPO}/kev-ministral-3b`;
-const SAMPLES = params.get("samples") ?? `${REPO}/demo/samples.json`;
+const BASE = params.get("base") ?? `${HF}/${WEIGHTS_REV}/kev-ministral-3b`;
+const SAMPLES = params.get("samples") ?? `${HF}/${SAMPLES_REV}/demo/samples.json`;
 
 const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
 let nextId = 1;
@@ -39,8 +42,13 @@ $("load").onclick = async () => {
       if (total < 1e6) return;   // graph files and configs: not worth a row
       let row = progRows.get(file);
       if (!row) {
+        // file names come from manifest.json, which ?base= can point elsewhere: textContent, not innerHTML
         row = document.createElement("div"); row.className = "prog";
-        row.innerHTML = `<span>${file}</span><div class="track"><div class="fill" style="width:0"></div></div><span></span>`;
+        const name = document.createElement("span"); name.textContent = file;
+        const track = document.createElement("div"); track.className = "track";
+        const fill = document.createElement("div"); fill.className = "fill"; fill.style.width = "0";
+        track.append(fill);
+        row.append(name, track, document.createElement("span"));
         $("progress").appendChild(row); progRows.set(file, row);
       }
       (row.querySelector(".fill") as HTMLElement).style.width = `${(100 * l) / total}%`;
@@ -49,7 +57,7 @@ $("load").onclick = async () => {
     loaded = true; setBusy(false);
     $("status").textContent = `loaded once in ${r.seconds.toFixed(1)} s · ${r.gpu}`;
     $("load").classList.add("hidden");
-    setTimeout(() => { $("progress").innerHTML = ""; }, 1500);
+    setTimeout(() => { $("progress").replaceChildren(); }, 1500);
   } catch (e: any) {
     $("status").textContent = "load failed: " + e.message;
     $<HTMLButtonElement>("load").disabled = false;
@@ -63,20 +71,22 @@ document.querySelectorAll<HTMLButtonElement>(".tab").forEach((t) => (t.onclick =
 }));
 
 // ------------------------------------------------------------------ decide
-interface Sample { id: string; source: string; site: string; goal: string; state: string; image: string; gold: string; browser_correct: boolean;
+interface Sample { id: string; source: string; site: string; goal: string; state: string; image: string; gold: string; also?: string[];
                    question: { type: string; instructions: string; criteria: Record<string, string> } }
 const samples: Sample[] = (await (await fetch(SAMPLES)).json()).map((s: Sample) => ({ ...s, image: new URL(s.image, SAMPLES).href }));
 let decideImage: string | Blob | undefined;
 let currentGold: string | undefined;
+let goldSet = new Set<string>();   // the gold action and equally correct alternatives (e.g. two links to one section)
 const sel = $<HTMLSelectElement>("sample");
 samples.forEach((s, i) => sel.add(new Option(`${s.source} · ${s.site} — ${s.goal.slice(0, 70)}`, String(i))));
 function showSample(i: number) {
   const s = samples[i];
   $<HTMLImageElement>("shot").src = s.image; decideImage = s.image; currentGold = s.gold;
+  goldSet = new Set([s.gold, ...(s.also ?? [])]);
   $<HTMLTextAreaElement>("state").value = s.state;
   $<HTMLInputElement>("qtext").value = s.question.instructions;
   $<HTMLTextAreaElement>("opts").value = Object.entries(s.question.criteria).map(([k, v]) => `${k}: ${v}`).join("\n");
-  $("bars").innerHTML = ""; $("verdict").textContent = ""; $("dmeta").textContent = "";
+  $("bars").replaceChildren(); $("verdict").textContent = ""; $("dmeta").textContent = "";
 }
 sel.onchange = () => showSample(Number(sel.value));
 showSample(0);
@@ -84,7 +94,7 @@ $("upload-btn").onclick = () => $("upload").click();
 $<HTMLInputElement>("upload").onchange = () => {
   const f = $<HTMLInputElement>("upload").files?.[0];
   if (!f) return;
-  decideImage = f; currentGold = undefined;
+  decideImage = f; currentGold = undefined; goldSet = new Set();
   $<HTMLImageElement>("shot").src = URL.createObjectURL(f);
 };
 $("decide").onclick = async () => {
@@ -97,7 +107,7 @@ $("decide").onclick = async () => {
   }
   if (Object.keys(criteria).length < 2) { $("verdict").textContent = "need at least two options"; return; }
   const req = { state: $<HTMLTextAreaElement>("state").value, questions: { action: { type: "choice", instructions: $<HTMLInputElement>("qtext").value, criteria } } };
-  setBusy(true); $("dmeta").textContent = "deciding…"; $("bars").innerHTML = "";
+  setBusy(true); $("dmeta").textContent = "deciding…"; $("bars").replaceChildren();
   try {
     const noimg = $<HTMLInputElement>("noimg").checked;
     const r = await call({ type: "decide", req, image: noimg ? undefined : decideImage });
@@ -105,12 +115,27 @@ $("decide").onclick = async () => {
     const order = keys.map((k, i) => [k, p[i]] as [string, number]).sort((a, b) => b[1] - a[1]);
     const shown = order.slice(0, 10);
     if (currentGold && !shown.some(([k]) => k === currentGold)) { const g = order.find(([k]) => k === currentGold); if (g) shown.push(g); }
-    $("bars").innerHTML = shown.map(([k, v], i) =>
-      `<div class="b${i === 0 ? " top" : ""}${k === currentGold ? " gold" : ""}"><span class="k" title="${k}: ${criteria[k] ?? ""}">${k} <span class="note">${(criteria[k] ?? "").slice(0, 40)}</span></span>` +
-      `<div class="track"><div class="fill" style="width:${(100 * v).toFixed(1)}%"></div></div><span>${(100 * v).toFixed(1)}%</span></div>`).join("");
+    // DOM nodes and textContent only: keys and descriptions come from samples.json, which ?samples= can replace
+    const bars = $("bars"); bars.replaceChildren();
+    shown.forEach(([k, v], i) => {
+      const row = document.createElement("div");
+      row.className = `b${i === 0 ? " top" : ""}${goldSet.has(k) ? " gold" : ""}`;
+      const label = document.createElement("span"); label.className = "k"; label.title = `${k}: ${criteria[k] ?? ""}`;
+      const note = document.createElement("span"); note.className = "note"; note.textContent = (criteria[k] ?? "").slice(0, 40);
+      label.append(`${k} `, note);
+      const track = document.createElement("div"); track.className = "track";
+      const fill = document.createElement("div"); fill.className = "fill"; fill.style.width = `${(100 * v).toFixed(1)}%`;
+      track.append(fill);
+      const pct = document.createElement("span"); pct.textContent = `${(100 * v).toFixed(1)}%`;
+      row.append(label, track, pct); bars.append(row);
+    });
     const choice = order[0][0];
     const v = $("verdict");
-    if (currentGold) { v.className = `verdict meta ${choice === currentGold ? "ok" : "bad"}`; v.textContent = choice === currentGold ? `✓ picked the gold action (${choice})` : `✗ picked ${choice}; gold is ${currentGold}`; }
+    if (currentGold) {
+      const ok = goldSet.has(choice);
+      v.className = `verdict meta ${ok ? "ok" : "bad"}`;
+      v.textContent = ok ? `✓ picked a correct action (${choice})` : `✗ picked ${choice}; correct: ${[...goldSet].join(" or ")}`;
+    }
     else { v.className = "verdict meta"; v.textContent = `picked ${choice}`; }
     $("dmeta").textContent = `${r.tokens} tokens in context (${r.imageTokens} from the screenshot) · ${(r.ms.total / 1000).toFixed(2)} s`;
   } catch (e: any) { $("dmeta").textContent = "error: " + e.message; }
@@ -132,9 +157,9 @@ $<HTMLInputElement>("dupload").onchange = () => {
 async function generate(prompt: string, maxNew: number, temperature: number, image: string | Blob | undefined, out: HTMLElement, meta: HTMLElement) {
   if (busy) return;
   setBusy(true);
-  const shown = prompt.replace("[IMG]", "🖼").replace(/</g, "&lt;");
-  out.innerHTML = `<span class="p">${shown}</span><span class="g"></span>`;
-  const g = out.querySelector(".g") as HTMLElement;
+  const p = document.createElement("span"); p.className = "p"; p.textContent = prompt.replace("[IMG]", "🖼");
+  const g = document.createElement("span"); g.className = "g";
+  out.replaceChildren(p, g);
   meta.textContent = "generating…";
   try {
     const r = await call({ type: "generate", prompt, maxNew, image, temperature }, (m) => { if (m.token) g.textContent = m.token.text; });
