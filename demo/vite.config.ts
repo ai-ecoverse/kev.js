@@ -14,5 +14,9 @@ export default defineConfig({
   preview: { headers: isolation, host: "127.0.0.1", port: 4173 },
   optimizeDeps: { exclude: ["onnxruntime-web"] },
   worker: { format: "es" },
-  build: { outDir: fileURLToPath(new URL("../dist-demo", import.meta.url)), target: "es2023", copyPublicDir: false, emptyOutDir: true },
+  build: {
+    outDir: fileURLToPath(new URL("../dist-demo", import.meta.url)), target: "es2023", copyPublicDir: false, emptyOutDir: true,
+    // the homepage, and the kev-ministral demo (one Ministral-3-3B download: decisions, image description, completion)
+    rollupOptions: { input: { index: fileURLToPath(new URL("index.html", import.meta.url)), ministral: fileURLToPath(new URL("ministral.html", import.meta.url)) } },
+  },
 });
