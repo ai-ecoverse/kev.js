@@ -1,3 +1,15 @@
+# [1.1.0](https://github.com/ai-ecoverse/kev.js/compare/v1.0.0...v1.1.0) (2026-10-17)
+
+
+### Bug Fixes
+
+* **load:** surface readSync errors and report on-demand progress by bytes read ([7355e01](https://github.com/ai-ecoverse/kev.js/commit/7355e01a0b45ee64da8592ecd31ba1e5c567aa07))
+
+
+### Features
+
+* **load:** open weights by path on onnxruntime-node and read them on demand on onnxruntime-web ([e82aafa](https://github.com/ai-ecoverse/kev.js/commit/e82aafa44001958e1e2ce67933c886eb4d673011)), closes [ai-ecoverse/slicc-ortllama#54](https://github.com/ai-ecoverse/slicc-ortllama/issues/54)
+
 # [1.0.0](https://github.com/ai-ecoverse/kev.js/compare/v0.6.0...v1.0.0) (2026-10-02)
 
 
