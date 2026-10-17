@@ -1,3 +1,10 @@
+## [1.1.1](https://github.com/ai-ecoverse/kev.js/compare/v1.1.0...v1.1.1) (2026-10-17)
+
+
+### Bug Fixes
+
+* **load:** release the decoder when the vision tower fails to load ([4de2976](https://github.com/ai-ecoverse/kev.js/commit/4de29767d8d0fdad81cba2016b4a9e875bea59e6))
+
 # [1.1.0](https://github.com/ai-ecoverse/kev.js/compare/v1.0.0...v1.1.0) (2026-10-17)
 
 
