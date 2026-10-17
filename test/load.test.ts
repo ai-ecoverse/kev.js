@@ -7,7 +7,7 @@ import * as ort from "onnxruntime-node";
 import { loadKev, modelFiles, type KevManifest, type OrtModule, type Progress, type ReadModelFile } from "../src/index.ts";
 import { fixtures, haveModel, modelDir, tokenizerFiles } from "./fixtures.ts";
 import { bounds, Parity, MAX_ABS_DP_FLOOR } from "./parity.ts";
-import { stubOrt, syntheticBundle, withoutFetch } from "./synthetic.ts";
+import { stubOrt, syntheticBundle, withoutFetch, type Created } from "./synthetic.ts";
 
 async function bundle() {
   return syntheticBundle(await tokenizerFiles());
@@ -67,6 +67,97 @@ test("a short local file is reported by name", async () => {
   await assert.rejects(loadKev(directory(files), { ort, variant: "v" }), /model\.onnx\.data_1: expected 10 bytes, read 5/);
 });
 
+test("filePath hands ORT the graph's path and reads no weights", async () => {
+  const files = await bundle();
+  const reads: string[] = [];
+  const read: ReadModelFile = async (p) => { reads.push(p); return files.get(p)!; };
+  const { ort, created } = stubOrt();
+  const progress: Progress[] = [];
+  const kev = await withoutFetch(() => loadKev(read, { ort, variant: "v", executionProviders: ["cpu"], filePath: (p) => `/models/kev/${p}`, onProgress: (p) => progress.push(p) }));
+  assert.equal(created[0].graph, "/models/kev/r-abc/v/model.onnx");
+  assert.equal(created[0].options.externalData, undefined);
+  assert.deepEqual(reads.sort(), ["manifest.json", "r-abc/head.safetensors", "r-abc/tokenizer.json", "r-abc/tokenizer_config.json"]);
+  const done = progress.filter((p) => p.total > 0 && p.loaded === p.total).map((p) => p.file);
+  for (const { path } of modelFiles(kev.manifest, "v")) assert.ok(done.includes(path), `no progress for ${path}`);
+});
+
+test("filePath is ignored for a URL source", async () => {
+  const files = await bundle();
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => new Response(files.get(String(input).replace("https://kev.test/", "")) as BodyInit)) as typeof fetch;
+  try {
+    const { ort, created } = stubOrt();
+    await loadKev("https://kev.test", { ort, variant: "v", cacheName: null, filePath: (p) => `/nowhere/${p}` });
+    assert.equal(new TextDecoder().decode(created[0].graph), "graph");
+    assert.equal(created[0].options.externalData!.length, 2);
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+/** An ort that reads every external-data file the way onnxruntime-web does while it creates a session: byteLength,
+ * then subarray(start, end) per tensor. */
+function webLikeOrt(tensors: Record<string, [number, number][]>) {
+  const seen: { path: string; isBytes: boolean; size: number; parts: string[] }[] = [];
+  const ort = { InferenceSession: { create: async (_graph: Uint8Array, options: Created["options"]) => {
+    for (const { path, data } of options.externalData ?? []) {
+      const parts: string[] = [];
+      try {
+        for (const [start, end] of tensors[path] ?? [[0, data.byteLength]]) parts.push(new TextDecoder().decode(data.subarray(start, end)));
+      } catch {
+        throw new Error("Failed to load external data file");
+      }
+      seen.push({ path, isBytes: data instanceof Uint8Array, size: data.byteLength, parts });
+    }
+    return { release: async () => {} };
+  } } };
+  return { ort: ort as unknown as OrtModule, seen };
+}
+
+test("readSync hands ORT weights that read just the bytes ORT asks for, when it asks", async () => {
+  const files = await bundle();
+  const reads: string[] = [];
+  const syncReads: [string, number, number][] = [];
+  const read: ReadModelFile = async (p) => { reads.push(p); return files.get(p)!; };
+  const readSync = (p: string, offset: number, length: number) => {
+    syncReads.push([p, offset, length]);
+    const b = files.get(p)!;
+    const padded = new Uint8Array(b.length + 8); padded.set(b, 4);
+    return padded.subarray(4 + offset, 4 + Math.min(b.length, offset + length));
+  };
+  const { ort, seen } = webLikeOrt({ "model.onnx.data_0": [[0, 5], [6, 10]], "model.onnx.data_1": [[6, 10], [0, 5]] });
+  await withoutFetch(() => loadKev(read, { ort, variant: "v", readSync }));
+  assert.ok(!reads.some((p) => p.includes(".data")), "no weight file is read before the session");
+  assert.deepEqual(syncReads, [
+    ["r-abc/v/model.onnx.data_0", 0, 5], ["r-abc/v/model.onnx.data_0", 6, 4],
+    ["r-abc/v/model.onnx.data_1", 6, 4], ["r-abc/v/model.onnx.data_1", 0, 5],
+  ]);
+  assert.deepEqual(seen, [
+    { path: "model.onnx.data_0", isBytes: true, size: 10, parts: ["shard", "zero"] },
+    { path: "model.onnx.data_1", isBytes: true, size: 10, parts: ["one!", "shard"] },
+  ]);
+});
+
+test("readSync: a weight file cut short fails the load by name", async () => {
+  const files = await bundle();
+  files.set("r-abc/v/model.onnx.data_1", new TextEncoder().encode("shard"));
+  const { ort } = webLikeOrt({});
+  await assert.rejects(loadKev(async (p) => files.get(p)!, { ort, variant: "v", readSync: (p, at, n) => files.get(p)!.subarray(at, at + n) }),
+    /model\.onnx\.data_1: expected 10 bytes, but it ends before byte 10/);
+});
+
+test("readSync is not used for a weight file the manifest gives no size for", async () => {
+  const files = await bundle();
+  const manifest = JSON.parse(new TextDecoder().decode(files.get("manifest.json"))) as KevManifest;
+  delete manifest.variants.v.sizes;
+  files.set("manifest.json", new TextEncoder().encode(JSON.stringify(manifest)));
+  const syncReads: string[] = [];
+  const { ort, created } = stubOrt();
+  await loadKev(async (p) => files.get(p)!, { ort, variant: "v", readSync: (p) => { syncReads.push(p); return files.get(p)!; } });
+  assert.deepEqual(syncReads, []);
+  assert.deepEqual(created[0].options.externalData!.map((x) => new TextDecoder().decode(x.data)), ["shard zero", "shard one!"]);
+});
+
 test("modelFiles lists what a variant loads, with sizes", async () => {
   const files = await bundle();
   const manifest = JSON.parse(new TextDecoder().decode(files.get("manifest.json"))) as KevManifest;
@@ -80,6 +171,17 @@ test("q8f32 loaded from local files matches the PyTorch reference", { skip: !hav
   const parity = new Parity();
   for (const f of fixtures.slice(0, 3)) (await kev.probs(f.record)).forEach((p, k) => parity.add(`${f.name} q${k}`, f.probs[k], p));
   console.log(`local files, q8f32: ${parity.summary()}`);
+  assert.deepEqual(parity.violations(bounds(kev.manifest, "q8f32")), []);
+  await kev.release();
+});
+
+test("q8f32 opened by path on onnxruntime-node matches the PyTorch reference", { skip: !haveModel && "no bundle" }, async () => {
+  const reads: string[] = [];
+  const kev = await withoutFetch(() => loadKev((p) => { reads.push(p); return readFile(`${modelDir}/${p}`); }, { ort: ort as unknown as OrtModule, variant: "q8f32", executionProviders: ["cpu"], temperature: 1, filePath: (p) => `${modelDir}/${p}` }));
+  assert.ok(!reads.some((p) => p.endsWith(".onnx") || p.includes(".onnx.data")), "graph and weights are left to onnxruntime");
+  const parity = new Parity();
+  for (const f of fixtures.slice(0, 3)) (await kev.probs(f.record)).forEach((p, k) => parity.add(`${f.name} q${k}`, f.probs[k], p));
+  console.log(`by path, q8f32: ${parity.summary()}`);
   assert.deepEqual(parity.violations(bounds(kev.manifest, "q8f32")), []);
   await kev.release();
 });

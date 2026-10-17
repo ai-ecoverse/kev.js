@@ -20,6 +20,10 @@ export type ModelSource = string | FileSystemDirectoryHandle | ReadModelFile;
 /** Coarse stage of loadKev, for a status line that keeps moving after the download finishes. */
 export type LoadPhase = "manifest" | "download" | "session" | "ready";
 
+/** Reads `length` bytes of one file of a packaged model at `offset`, synchronously, by its path in the bundle: an OPFS
+ * sync access handle in a worker, or a virtual file system with sync reads. */
+export type ReadModelFileSync = (path: string, offset: number, length: number) => Uint8Array;
+
 export interface LoadOptions extends KevOptions {
   ort: OrtModule;
   /** variant in manifest.variants; default: the first one listed */
@@ -37,6 +41,15 @@ export interface LoadOptions extends KevOptions {
   /** weight files fetched at once. Default 2: on a bandwidth-limited link more streams are slower in aggregate
    * (measured through a tunnel: 1.2 MB/s with one stream, 0.75 MB/s across six). */
   concurrency?: number;
+  /** The file system path of a bundle file, for an ONNX Runtime that opens files itself (onnxruntime-node). Given one,
+   * the decoder and the vision tower are created from their graphs' paths and ORT reads their weights from the files
+   * beside them, so loadKev never holds the weights: peak memory stays near the model's size instead of twice it. */
+  filePath?: (path: string) => string;
+  /** Reads part of a weight file synchronously (onnxruntime-web, local sources). onnxruntime-web asks for each weight's
+   * bytes while it builds the session, in no particular order of files; with this, loadKev reads just those bytes when
+   * ORT asks, instead of every weight file before the session starts, so one tensor at a time is held outside ORT.
+   * Needs the manifest's file sizes. */
+  readSync?: ReadModelFileSync;
 }
 
 async function readWithProgress(res: Response, file: string, onProgress?: (p: Progress) => void, expected = 0): Promise<Uint8Array> {
@@ -145,6 +158,23 @@ async function pool<T>(jobs: (() => Promise<T>)[], limit: number): Promise<T[]> 
   return out;
 }
 
+/** A weight file onnxruntime-web reads on demand. It keeps each mounted file as given and only takes its byteLength and
+ * subarray(start, end) while it creates the session, so a Uint8Array that reads those bytes at each subarray stands in
+ * for the file. */
+class LazyFile extends Uint8Array {
+  constructor(private readonly file: string, private readonly size: number, private readonly read: ReadModelFileSync, private readonly failed: (e: Error) => Error) {
+    super(0);
+  }
+  override get byteLength(): number { return this.size; }
+  override get length(): number { return this.size; }
+  override subarray(start = 0, end = this.size): Uint8Array<ArrayBuffer> {
+    const got = this.read(this.file, start, end - start);
+    if (got.byteLength !== end - start)
+      throw this.failed(new Error(`${this.file}: expected ${this.size} bytes, but it ends before byte ${end} (incomplete download?)`));
+    return new Uint8Array(got.buffer, got.byteOffset, got.byteLength) as Uint8Array<ArrayBuffer>;
+  }
+}
+
 export async function loadKev(source: ModelSource, o: LoadOptions): Promise<Kev> {
   const baseUrl = typeof source === "string" ? source : null;
   const read = baseUrl !== null ? null : typeof source === "function" ? source : directoryReader(source as FileSystemDirectoryHandle);
@@ -169,26 +199,49 @@ export async function loadKev(source: ModelSource, o: LoadOptions): Promise<Kev>
   const get = (p: string) => read ? readLocal(read, p, { onProgress: o.onProgress, bytes: sizes[p] })
     : fetchFile(join(baseUrl!, p), { cacheName: o.cacheName, onProgress: o.onProgress, file: p, bytes: sizes[p], rev });
   const [tokJson, tokCfg] = (await Promise.all([get(manifest.files.tokenizer), get(manifest.files.tokenizer_config)])).map(decode);
+  // onnxruntime-node opens a graph by path and reads its weights itself; onnxruntime-web reads lazy weights on demand
+  const byPath = read ? o.filePath : undefined;
+  const readSync = read && !byPath ? o.readSync : undefined;
+  let failure: Error | undefined;
+  const failed = (e: Error) => (failure ??= e);
+  const graphs = new Set([v.model, ...(tower ? [tower.model] : [])]);
+  const weights = new Set([...v.data, ...(tower?.data ?? [])]);
+  const skipped = (p: string) => { if (sizes[p]) o.onProgress?.({ file: p, loaded: sizes[p], total: sizes[p] }); };
+  const load = async (p: string): Promise<Uint8Array | string> => {
+    if (byPath && graphs.has(p)) { skipped(p); return byPath(p); }
+    if (!weights.has(p) || !(byPath || (readSync && sizes[p]))) return get(p);
+    skipped(p);
+    return readSync ? new LazyFile(p, sizes[p], readSync, failed) : "";
+  };
   const towerFiles = tower ? [tower.model, ...tower.data] : [];
-  const [head, graph, ...rest] = await pool([manifest.files.head, v.model, ...v.data, ...towerFiles].map((p) => () => get(p)), o.concurrency ?? 2);
+  const [head, graph, ...rest] = await pool([manifest.files.head, v.model, ...v.data, ...towerFiles].map((p) => () => load(p)), o.concurrency ?? 2);
   const data = rest.slice(0, v.data.length), towerData = rest.slice(v.data.length);
+  const external = (paths: string[], files: (Uint8Array | string)[]) =>
+    byPath ? {} : { externalData: paths.map((p, i) => ({ path: p.split("/").pop()!, data: files[i] as Uint8Array })) };
   const tokenizer = new Tokenizer(JSON.parse(tokJson), JSON.parse(tokCfg));
   o.onPhase?.("session");
   const eps = o.executionProviders ?? ["webgpu", "wasm"];
   const gpu = eps.some((e) => (typeof e === "string" ? e : e.name) === "webgpu");
-  const session = await o.ort.InferenceSession.create(graph, {
+  const create = async (model: Uint8Array | string, options: InferenceSession.SessionOptions) => {
+    try {
+      return await o.ort.InferenceSession.create(model, options);
+    } catch (e) {
+      throw failure ?? e;
+    }
+  };
+  const session = await create(graph, {
     ...Kev.sessionOptions(manifest, variant, gpu),
     executionProviders: eps,
-    externalData: v.data.map((p, i) => ({ path: p.split("/").pop()!, data: data[i] })),
+    ...external(v.data, data),
     ...o.sessionOptions,
   });
   // the tower's weights are fp16, cast to fp32 when the session loads; its output stays on the CPU for the decoder
-  const vision = tower && await o.ort.InferenceSession.create(towerData[0], {
+  const vision = tower && await create(towerData[0], {
     graphOptimizationLevel: "all",
     executionProviders: eps,
-    externalData: tower.data.map((p, i) => ({ path: p.split("/").pop()!, data: towerData[i + 1] })),
+    ...external(tower.data, towerData.slice(1)),
     ...o.sessionOptions,
   });
   o.onPhase?.("ready");
-  return new Kev({ ort: o.ort, session, head: PointerHead.fromSafetensors(head.slice().buffer), tokenizer, manifest, variant, options: o, vision });
+  return new Kev({ ort: o.ort, session, head: PointerHead.fromSafetensors((head as Uint8Array).slice().buffer), tokenizer, manifest, variant, options: o, vision });
 }

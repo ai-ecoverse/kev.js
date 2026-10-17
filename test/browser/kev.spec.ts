@@ -75,6 +75,33 @@ for (const ep of ["wasm", "webgpu"] as const) {
   });
 }
 
+// onnxruntime-web asks for each weight's bytes while it creates the session; readSync hands it weights that read their
+// file only then, so a worker never holds the whole model before the session starts
+for (const ep of ["wasm", "webgpu"] as const) {
+  test(`Kev-0.8B q8f32 read on demand from OPFS sync handles on ${ep} matches the PyTorch reference`, async ({ page }) => {
+    test.setTimeout(20 * 60_000);
+    const cap = (ep === "webgpu" && Number(process.env.KEV_WEBGPU_FIXTURES)) || Number(process.env.KEV_BROWSER_FIXTURES);
+    const r = await run(page, "model", { ep, limit: Math.min(cap || 3, 3), sync: true });
+    if (r.skip) {
+      const required = process.env[String(r.skip).includes("WebGPU") ? "KEV_REQUIRE_WEBGPU" : "KEV_REQUIRE_MODEL"] === "1";
+      expect(required ? r.skip : undefined, "required case could not run").toBeUndefined();
+      test.skip(true, String(r.skip));
+    }
+    console.log(`[${ep}, on demand${r.adapter ? `, ${r.adapter}` : ""}] ${r.fixtures} fixtures, ${r.summary}; load ${r.loadMs} ms`);
+    expect(r.violations, "parity with the PyTorch reference (test/parity.ts)").toEqual([]);
+    const reads = r.syncReads as [string, number, number][];
+    const sizes = r.sizes as Record<string, number>;
+    const files = r.weightFiles as string[];
+    const ranges = new Set(reads.map(([p, at]) => `${p}@${at}`));
+    expect(ranges.size, "no weight is read twice").toBe(reads.length);
+    expect(new Set(reads.map(([p]) => p)), "every weight file is read").toEqual(new Set(files));
+    const read = reads.reduce((t, [, , n]) => t + n, 0), total = files.reduce((t, p) => t + sizes[p], 0);
+    console.log(`[${ep}, on demand] ${reads.length} reads, ${(read / 2 ** 20).toFixed(0)} of ${(total / 2 ** 20).toFixed(0)} MiB, largest ${(Math.max(...reads.map(([, , n]) => n)) / 2 ** 20).toFixed(0)} MiB`);
+    expect(read).toBeLessThanOrEqual(total);
+    expect(r.modelFetches, "no model file is fetched when loading from OPFS").toEqual([]);
+  });
+}
+
 // Image requests on a vision bundle (public/models/<KEV_VISION_MODEL>, default kev-4b-vision, built locally: README,
 // Images) against fixtures/<model>.json. KEV_VISION_EP picks the backend (default webgpu), KEV_VISION_REPORT saves
 // the per-set report as JSON.

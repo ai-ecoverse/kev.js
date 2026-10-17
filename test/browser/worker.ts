@@ -97,7 +97,7 @@ const cases = {
   },
 
   /** The published model, copied into OPFS, loaded from there on onnxruntime-web and compared with PyTorch. */
-  async model(o: { model?: string; variant?: string; ep?: "wasm" | "webgpu"; limit?: number }) {
+  async model(o: { model?: string; variant?: string; ep?: "wasm" | "webgpu"; limit?: number; sync?: boolean }) {
     const model = o.model ?? "kev-0.8b", variant = o.variant ?? "q8f32", ep = o.ep ?? "wasm";
     const res = await fetch(`/models/${model}/manifest.json`);
     if (!res.ok) return { skip: `no bundle at public/models/${model} (node --import tsx scripts/fetch-model.ts ${model} ${variant})` };
@@ -131,13 +131,23 @@ const cases = {
       fetched.push(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
       return realFetch(input, init);
     }) as typeof fetch;
+    // sync: weights read on demand through OPFS sync access handles, as a worker with a local bundle would
+    const handles = new Map<string, SyncHandle>();
+    if (o.sync) for (const p of manifest.variants[variant].data) handles.set(p, await ((await fileHandle(dir, p)) as unknown as { createSyncAccessHandle(): Promise<SyncHandle> }).createSyncAccessHandle());
+    const syncReads: [string, number, number][] = [];
+    const readSync = (p: string, offset: number, length: number) => {
+      syncReads.push([p, offset, length]);
+      const b = new Uint8Array(length);
+      return b.subarray(0, handles.get(p)!.read(b, { at: offset }));
+    };
     const t1 = performance.now();
     let kev;
     try {
-      kev = await loadKev(dir, { ort: ort as unknown as OrtModule, variant, executionProviders: [ep], temperature: 1,
+      kev = await loadKev(dir, { ort: ort as unknown as OrtModule, variant, executionProviders: [ep], temperature: 1, readSync: o.sync ? readSync : undefined,
         onPhase: (phase) => say(`${model} ${variant} ${ep}: ${phase} at ${Math.round(performance.now() - t1)} ms`) });
     } finally {
       globalThis.fetch = realFetch;
+      for (const h of handles.values()) h.close();
     }
     const loadMs = performance.now() - t1;
     say(`${model} ${variant}: loaded from OPFS on ${ep}${adapter ? ` (${adapter})` : ""} in ${Math.round(loadMs)} ms`);
@@ -159,6 +169,7 @@ const cases = {
       answerKeys: Object.keys(answers), expectedAnswerKeys: Object.keys(sample[0].answers),
       modelFetches: fetched.filter((u) => u.includes("/models/")), caches: await caches.keys(),
       loadMs: Math.round(loadMs), msPerFixture: Math.round(msPerFixture),
+      syncReads, weightFiles: manifest.variants[variant].data, sizes: manifest.variants[variant].sizes,
     };
   },
 
@@ -225,6 +236,9 @@ const cases = {
     return { ep, adapter, variant, run: manifest.run, fixtureRun: fx.run, loadMs: Math.round(loadMs), sets: out };
   },
 };
+
+/** The parts of an OPFS FileSystemSyncAccessHandle (workers only) the on-demand case uses. */
+interface SyncHandle { getSize(): number; read(buffer: Uint8Array, options: { at: number }): number; close(): void }
 
 interface VisionFixture {
   set: string; id: string; image: string; request: SystemOneRequest; labels: number[]; probs: number[][]; pixels: { sum: number };
