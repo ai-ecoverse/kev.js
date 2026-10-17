@@ -250,12 +250,20 @@ export async function loadKev(source: ModelSource, o: LoadOptions): Promise<Kev>
     ...o.sessionOptions,
   });
   // the tower's weights are fp16, cast to fp32 when the session loads; its output stays on the CPU for the decoder
-  const vision = tower && await create(towerData[0], {
-    graphOptimizationLevel: "all",
-    executionProviders: eps,
-    ...external(tower.data, towerData.slice(1)),
-    ...o.sessionOptions,
-  });
+  let vision: InferenceSession | undefined;
+  try {
+    // with filePath or readSync the tower's weights are read while its session is created: a failure there must not
+    // leave the decoder loaded
+    vision = tower && await create(towerData[0], {
+      graphOptimizationLevel: "all",
+      executionProviders: eps,
+      ...external(tower.data, towerData.slice(1)),
+      ...o.sessionOptions,
+    });
+  } catch (e) {
+    await session.release().catch(() => undefined);
+    throw e;
+  }
   if (readSync) for (const p of weights) skipped(p);
   o.onPhase?.("ready");
   return new Kev({ ort: o.ort, session, head: PointerHead.fromSafetensors((head as Uint8Array).slice().buffer), tokenizer, manifest, variant, options: o, vision });

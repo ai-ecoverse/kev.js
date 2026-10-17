@@ -157,6 +157,25 @@ test("readSync: what a read throws fails the load, though onnxruntime-web swallo
   await assert.rejects(loadKev(async (p) => files.get(p)!, { ort, variant: "v", readSync: () => { throw "no handle"; } }), /^Error: no handle$/);
 });
 
+test("readSync: a vision tower that fails to load releases the decoder", async () => {
+  const files = await bundle();
+  const manifest = JSON.parse(new TextDecoder().decode(files.get("manifest.json"))) as KevManifest;
+  files.set("r-abc/vision/model.onnx", new TextEncoder().encode("tower"));
+  files.set("r-abc/vision/model.onnx.data", new TextEncoder().encode("ey"));
+  (manifest as unknown as { vision: unknown }).vision = { model: "r-abc/vision/model.onnx", data: ["r-abc/vision/model.onnx.data"], sizes: { "r-abc/vision/model.onnx": 5, "r-abc/vision/model.onnx.data": 4 } };
+  files.set("manifest.json", new TextEncoder().encode(JSON.stringify(manifest)));
+  const released: string[] = [];
+  const ort = { InferenceSession: { create: async (graph: Uint8Array, options: Created["options"]) => {
+    for (const { data } of options.externalData ?? []) {
+      try { data.subarray(0, data.byteLength); } catch { throw new Error("Failed to load external data file"); }
+    }
+    return { release: async () => { released.push(new TextDecoder().decode(graph)); } };
+  } } } as unknown as OrtModule;
+  await assert.rejects(loadKev(async (p) => files.get(p)!, { ort, variant: "v", readSync: (p, at, n) => files.get(p)!.subarray(at, at + n) }),
+    /vision\/model\.onnx\.data: expected 4 bytes, but it ends before byte 4/);
+  assert.deepEqual(released, ["graph"]);
+});
+
 test("readSync is not used for a weight file the manifest gives no size for", async () => {
   const files = await bundle();
   const manifest = JSON.parse(new TextDecoder().decode(files.get("manifest.json"))) as KevManifest;
