@@ -126,7 +126,9 @@ test("readSync hands ORT weights that read just the bytes ORT asks for, when it 
     return padded.subarray(4 + offset, 4 + Math.min(b.length, offset + length));
   };
   const { ort, seen } = webLikeOrt({ "model.onnx.data_0": [[0, 5], [6, 10]], "model.onnx.data_1": [[6, 10], [0, 5]] });
-  await withoutFetch(() => loadKev(read, { ort, variant: "v", readSync }));
+  const progress: Progress[] = [];
+  await withoutFetch(() => loadKev(read, { ort, variant: "v", readSync, onProgress: (p) => progress.push(p) }));
+  assert.deepEqual(progress.filter((p) => p.file.endsWith("data_1")).map((p) => p.loaded), [0, 4, 9, 10]);
   assert.ok(!reads.some((p) => p.includes(".data")), "no weight file is read before the session");
   assert.deepEqual(syncReads, [
     ["r-abc/v/model.onnx.data_0", 0, 5], ["r-abc/v/model.onnx.data_0", 6, 4],
@@ -144,6 +146,15 @@ test("readSync: a weight file cut short fails the load by name", async () => {
   const { ort } = webLikeOrt({});
   await assert.rejects(loadKev(async (p) => files.get(p)!, { ort, variant: "v", readSync: (p, at, n) => files.get(p)!.subarray(at, at + n) }),
     /model\.onnx\.data_1: expected 10 bytes, but it ends before byte 10/);
+});
+
+test("readSync: what a read throws fails the load, though onnxruntime-web swallows it", async () => {
+  const files = await bundle();
+  const { ort } = webLikeOrt({});
+  const readSync = (p: string) => { if (p.endsWith("data_1")) throw new DOMException("data_1 is gone", "NotFoundError"); return files.get(p)!.subarray(0, 0); };
+  await assert.rejects(loadKev(async (p) => files.get(p)!, { ort, variant: "v", readSync: (p, at, n) => (p.endsWith("data_0") ? files.get(p)!.subarray(at, at + n) : readSync(p)) }),
+    (e: Error) => e.name === "NotFoundError" && /data_1 is gone/.test(e.message));
+  await assert.rejects(loadKev(async (p) => files.get(p)!, { ort, variant: "v", readSync: () => { throw "no handle"; } }), /^Error: no handle$/);
 });
 
 test("readSync is not used for a weight file the manifest gives no size for", async () => {

@@ -160,17 +160,15 @@ async function pool<T>(jobs: (() => Promise<T>)[], limit: number): Promise<T[]> 
 
 /** A weight file onnxruntime-web reads on demand. It keeps each mounted file as given and only takes its byteLength and
  * subarray(start, end) while it creates the session, so a Uint8Array that reads those bytes at each subarray stands in
- * for the file. */
+ * for the file. ORT swallows what subarray throws, so `read` records its errors for loadKev to rethrow. */
 class LazyFile extends Uint8Array {
-  constructor(private readonly file: string, private readonly size: number, private readonly read: ReadModelFileSync, private readonly failed: (e: Error) => Error) {
+  constructor(private readonly size: number, private readonly read: (start: number, end: number) => Uint8Array) {
     super(0);
   }
   override get byteLength(): number { return this.size; }
   override get length(): number { return this.size; }
   override subarray(start = 0, end = this.size): Uint8Array<ArrayBuffer> {
-    const got = this.read(this.file, start, end - start);
-    if (got.byteLength !== end - start)
-      throw this.failed(new Error(`${this.file}: expected ${this.size} bytes, but it ends before byte ${end} (incomplete download?)`));
+    const got = this.read(start, end);
     return new Uint8Array(got.buffer, got.byteOffset, got.byteLength) as Uint8Array<ArrayBuffer>;
   }
 }
@@ -203,15 +201,31 @@ export async function loadKev(source: ModelSource, o: LoadOptions): Promise<Kev>
   const byPath = read ? o.filePath : undefined;
   const readSync = read && !byPath ? o.readSync : undefined;
   let failure: Error | undefined;
-  const failed = (e: Error) => (failure ??= e);
+  const failed = (e: unknown) => (failure ??= e instanceof Error ? e : new Error(String(e)));
+  const lazy = (p: string) => {
+    let loaded = 0;
+    return new LazyFile(sizes[p], (start, end) => {
+      let got: Uint8Array;
+      try {
+        got = readSync!(p, start, end - start);
+      } catch (e) {
+        throw failed(e);
+      }
+      if (got.byteLength !== end - start) throw failed(new Error(`${p}: expected ${sizes[p]} bytes, but it ends before byte ${end} (incomplete download?)`));
+      loaded += got.byteLength;
+      o.onProgress?.({ file: p, loaded, total: sizes[p] });
+      return got;
+    });
+  };
   const graphs = new Set([v.model, ...(tower ? [tower.model] : [])]);
   const weights = new Set([...v.data, ...(tower?.data ?? [])]);
   const skipped = (p: string) => { if (sizes[p]) o.onProgress?.({ file: p, loaded: sizes[p], total: sizes[p] }); };
   const load = async (p: string): Promise<Uint8Array | string> => {
     if (byPath && graphs.has(p)) { skipped(p); return byPath(p); }
     if (!weights.has(p) || !(byPath || (readSync && sizes[p]))) return get(p);
+    if (readSync) return lazy(p);
     skipped(p);
-    return readSync ? new LazyFile(p, sizes[p], readSync, failed) : "";
+    return "";
   };
   const towerFiles = tower ? [tower.model, ...tower.data] : [];
   const [head, graph, ...rest] = await pool([manifest.files.head, v.model, ...v.data, ...towerFiles].map((p) => () => load(p)), o.concurrency ?? 2);
@@ -242,6 +256,7 @@ export async function loadKev(source: ModelSource, o: LoadOptions): Promise<Kev>
     ...external(tower.data, towerData.slice(1)),
     ...o.sessionOptions,
   });
+  if (readSync) for (const p of weights) skipped(p);
   o.onPhase?.("ready");
   return new Kev({ ort: o.ort, session, head: PointerHead.fromSafetensors((head as Uint8Array).slice().buffer), tokenizer, manifest, variant, options: o, vision });
 }

@@ -133,7 +133,8 @@ const cases = {
     }) as typeof fetch;
     // sync: weights read on demand through OPFS sync access handles, as a worker with a local bundle would
     const handles = new Map<string, SyncHandle>();
-    if (o.sync) for (const p of manifest.variants[variant].data) handles.set(p, await ((await fileHandle(dir, p)) as unknown as { createSyncAccessHandle(): Promise<SyncHandle> }).createSyncAccessHandle());
+    const weightFiles = [...manifest.variants[variant].data, ...(manifest.vision?.data ?? [])];
+    if (o.sync) for (const p of weightFiles) handles.set(p, await ((await fileHandle(dir, p)) as unknown as { createSyncAccessHandle(): Promise<SyncHandle> }).createSyncAccessHandle());
     const syncReads: [string, number, number][] = [];
     const readSync = (p: string, offset: number, length: number) => {
       syncReads.push([p, offset, length]);
@@ -169,7 +170,7 @@ const cases = {
       answerKeys: Object.keys(answers), expectedAnswerKeys: Object.keys(sample[0].answers),
       modelFetches: fetched.filter((u) => u.includes("/models/")), caches: await caches.keys(),
       loadMs: Math.round(loadMs), msPerFixture: Math.round(msPerFixture),
-      syncReads, weightFiles: manifest.variants[variant].data, sizes: manifest.variants[variant].sizes,
+      syncReads, weightFiles, sizes: { ...manifest.variants[variant].sizes, ...manifest.vision?.sizes },
     };
   },
 
