@@ -265,6 +265,26 @@ const kev = await loadKev(opfs, { ort, variant: "q8f32" });
 // or through a virtual file system: loadKev((path) => fs.readFileBinary(`/models/kev-9b/${path}`), { ort })
 ```
 
+Read this way, every weight file is still held in memory before the session is built, and ONNX Runtime copies the
+weights again while it builds it, so `kev-9b` (8.9 GB) peaks near twice its size. Two options keep a local bundle's
+weights out of loadKev. On onnxruntime-node, `filePath` maps a bundle path to a file system path: loadKev opens the
+graphs by path and ONNX Runtime reads the weights beside them itself. On onnxruntime-web, `readSync` reads part of a
+file synchronously: onnxruntime-web asks for each weight's bytes while it builds the session, in no order of files, and
+loadKev reads just those bytes then, so one tensor at a time is held outside ONNX Runtime. In a worker, OPFS sync
+access handles do that. Both read each weight once. They apply to local sources only, and `readSync` to the weight
+files whose size the manifest records.
+
+```ts
+const kev = await loadKev((path) => readFile(join(dir, path)), { ort, filePath: (path) => join(dir, path) });   // Node
+const kev = await loadKev(opfs, { ort, readSync: (path, at, length) => {                                       // worker
+  const bytes = new Uint8Array(length);
+  return bytes.subarray(0, handles.get(path).read(bytes, { at }));
+} });
+```
+
+With `filePath`, loading `kev-9b` on an M4 Max peaks at 9.1 GB of memory instead of 18.6 GB, and `kev-4b` at 5.2 GB
+instead of 10.9 GB.
+
 ## Testing
 
 ```bash
@@ -280,7 +300,8 @@ cd export && uv run python -m kev_web_export.parity --model build/kev-0.8b/web-q
 The browser tests (`test/browser`, Playwright) run their cases in a module worker, as the demo does. Three write a
 synthetic bundle into the browser's OPFS and load it through a directory handle and a read function. Two copy the
 Kev-0.8B bundle into OPFS, load it from there on WASM and on WebGPU, and compare with the PyTorch fixtures; they also
-check that no model file was fetched and nothing went to Cache Storage. Without a bundle, or without a WebGPU adapter,
+check that no model file was fetched and nothing went to Cache Storage. Two more load it with `readSync` over OPFS
+sync access handles and check that onnxruntime-web read every weight once. Without a bundle, or without a WebGPU adapter,
 those skip; `KEV_REQUIRE_MODEL=1` and `KEV_REQUIRE_WEBGPU=1` make that a failure. CI downloads the bundle (cached per
 published manifest) and runs the Node and browser suites against it. Its runners have no GPU, so WebGPU runs on
 SwiftShader (a CPU Vulkan): that checks the WebGPU kernels' results, not GPU speed, at about 150 s per fixture, so CI
