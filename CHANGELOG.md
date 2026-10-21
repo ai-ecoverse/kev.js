@@ -1,3 +1,15 @@
+# [1.2.0](https://github.com/ai-ecoverse/kev.js/compare/v1.1.1...v1.2.0) (2026-10-21)
+
+
+### Bug Fixes
+
+* **ministral:** release sessions on a late load failure, announce only read files, keep output locations off onnxruntime-node, leave decision timing to decisions ([dd52e80](https://github.com/ai-ecoverse/kev.js/commit/dd52e802fbc210ffd04c75fe32f40f57ba2784c5))
+
+
+### Features
+
+* **ministral:** loadKevMinistral serves kev-ministral decisions and generation from one load ([39df785](https://github.com/ai-ecoverse/kev.js/commit/39df785b803a7ed1c7e2aa3c3af8d05c5f3e99f9))
+
 ## [1.1.1](https://github.com/ai-ecoverse/kev.js/compare/v1.1.0...v1.1.1) (2026-10-17)
 
 
