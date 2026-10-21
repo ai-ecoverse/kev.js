@@ -6,7 +6,7 @@ import { Tokenizer } from "@huggingface/tokenizers";
 import type { InferenceSession } from "onnxruntime-common";
 import { PointerHead } from "./head.ts";
 import { Kev, type KevManifest, type KevOptions, type OrtModule } from "./model.ts";
-import { isMinistralManifest, KevMinistral, MINISTRAL_FILES, ministralHead, ministralParts, type KevMinistralOptions } from "./ministral.ts";
+import { isMinistralManifest, KevMinistral, MINISTRAL_FILES, ministralFiles, ministralHead, ministralParts, type KevMinistralOptions } from "./ministral.ts";
 
 export interface Progress { file: string; loaded: number; total: number }
 
@@ -341,40 +341,41 @@ export async function loadKevMinistral(source: ModelSource, o: MinistralLoadOpti
   const files = new BundleFiles(source, o as LoadOptions);
   const manifest = await files.manifest();
   if (!isMinistralManifest(manifest)) throw new Error("not a kev-ministral bundle (manifest.json has no embed_tokens and decoder_model_merged files): load it with loadKev");
-  const parts = ministralParts(manifest, o.vision !== false);
+  const vision = o.vision !== false;
+  const parts = ministralParts(manifest, vision);
+  // sizes of the files this load reads only: an announced file that is never read would never complete
+  const sizes = Object.fromEntries(ministralFiles(manifest, vision).flatMap(({ path, bytes }) => (bytes ? [[path, bytes]] : [])));
   await files.plan({
-    sizes: manifest.sizes ?? {}, rev: manifest.revision ?? manifest.run,
+    sizes, rev: manifest.revision ?? manifest.run,
     graphs: parts.map((g) => g.model), weights: parts.flatMap((g) => g.data),
   });
   const [tokJson, tokCfg, headJson] = await Promise.all([files.text(MINISTRAL_FILES.tokenizer), files.text(MINISTRAL_FILES.tokenizer_config), files.text(MINISTRAL_FILES.head_json)]);
   const [headBin, ...loaded] = await files.loadAll([MINISTRAL_FILES.head_bin, ...parts.flatMap((g) => [g.model, ...g.data])]);
   const tokenizer = new Tokenizer(JSON.parse(tokJson), JSON.parse(tokCfg));
+  const head = ministralHead(JSON.parse(headJson), headBin as Uint8Array);
   o.onPhase?.("session");
   const { eps, gpu } = providers(o as LoadOptions);
   // onnxruntime-node keeps outputs on the CPU whatever the preferred location, and with one set its WebGPU EP
-  // pre-allocates outputs at a stale shape ("Tensor size mismatch"), so the locations are for onnxruntime-web only
-  const gpuBuffers = gpu && !(o.ort as { env?: { versions?: { node?: string } } }).env?.versions?.node;
+  // pre-allocates outputs at a stale shape ("Tensor size mismatch"): no location reaches it, not even a caller's
+  const node = !!(o.ort as { env?: { versions?: { node?: string } } }).env?.versions?.node;
   const sessions: InferenceSession[] = [];
   try {
     let at = 0;
     for (const g of parts) {
       const graph = loaded[at], data = loaded.slice(at + 1, at + 1 + g.data.length);
       at += 1 + g.data.length;
-      sessions.push(await files.create(graph, {
-        ...KevMinistral.sessionOptions(g.name, manifest, gpuBuffers),
-        executionProviders: eps,
-        ...files.external(g.data, data),
-        ...o.sessionOptions,
-      }));
+      const ours = KevMinistral.sessionOptions(g.name, manifest, gpu && !node);
+      const options: InferenceSession.SessionOptions = { ...ours, executionProviders: eps, ...files.external(g.data, data), ...o.sessionOptions };
+      if (node) delete options.preferredOutputLocation;
+      else if (ours.preferredOutputLocation) options.preferredOutputLocation = ours.preferredOutputLocation;
+      sessions.push(await files.create(graph, options));
     }
+    const [embed, decoder, visionSession] = sessions;
+    const kev = new KevMinistral({ ort: o.ort, embed, decoder, vision: visionSession, tokenizer, manifest, options: o, head });
+    files.done();
+    return kev;
   } catch (e) {
     for (const s of sessions) await s.release().catch(() => undefined);
     throw e;
   }
-  files.done();
-  const [embed, decoder, vision] = sessions;
-  return new KevMinistral({
-    ort: o.ort, embed, decoder, vision, tokenizer, manifest, options: o,
-    head: ministralHead(JSON.parse(headJson), headBin as Uint8Array),
-  });
 }

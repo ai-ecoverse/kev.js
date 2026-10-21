@@ -314,6 +314,10 @@ test("generation with an image: at the [IMG] placeholder, else after <s>", async
   const r = await a.kev.generate("[IMG]\nThis shows", { image, maxTokens: 1 });
   const plain = a.kev.tokenizer.encode("[IMG]\nThis shows", { add_special_tokens: true }).ids;
   assert.equal(r.inputTokens, plain.length - 1 + 4);
+  await a.kev.probs(toRecord(REQ).record, { width: 56, height: 28, data: new Uint8Array(56 * 28 * 4) });
+  const decided = { ...a.kev.timing };
+  await a.kev.generate("[IMG] again", { image, maxTokens: 1 });
+  assert.deepEqual(a.kev.timing, decided, "generation leaves the last decision's timing alone");
   assert.equal(a.o.calls[0].n, r.inputTokens - 1);
   assert.ok(r.ms.image >= 0);
   const b = await fakeKev();
@@ -345,11 +349,11 @@ async function syntheticBundle() {
   ]);
 }
 
-function recordingOrt(fail?: string) {
+function recordingOrt(fail?: string, env?: object) {
   const created: { graph: Uint8Array | string; options: Omit<import("onnxruntime-common").InferenceSession.SessionOptions, "externalData"> & { externalData?: { path: string; data: Uint8Array }[] } }[] = [];
   const released: string[] = [];
   const name = (g: Uint8Array | string) => (typeof g === "string" ? g : new TextDecoder().decode(g));
-  const ort = { ...fakeOrt().ort, InferenceSession: { create: async (graph: Uint8Array | string, options: never) => {
+  const ort = { ...fakeOrt().ort, ...(env ? { env } : {}), InferenceSession: { create: async (graph: Uint8Array | string, options: never) => {
     if (fail && name(graph).includes(fail)) throw new Error(`${fail} failed`);
     created.push({ graph, options });
     return { inputNames: [], outputNames: [], release: async () => { released.push(name(graph)); } };
@@ -435,4 +439,40 @@ test(`the published bundle on onnxruntime-node (${ep}) matches the reference`, {
     assert.ok(same >= Math.min(10, ref.length), `${g.name}: only ${same} tokens as the reference`);
   }
   await kev.release();
+});
+
+test("loadKevMinistral: a caller's preferredOutputLocation never reaches onnxruntime-node; on onnxruntime-web the decoder keeps its own", async () => {
+  const files = await syntheticBundle();
+  const read = async (p: string) => files.get(p)!;
+  const node = recordingOrt(undefined, { versions: { node: "1.30.0" } });
+  await loadKevMinistral(read, { ort: node.ort, executionProviders: ["webgpu"], sessionOptions: { preferredOutputLocation: "cpu", logSeverityLevel: 3 } });
+  assert.ok(node.created.every((c) => !("preferredOutputLocation" in c.options) && c.options.logSeverityLevel === 3));
+  const web = recordingOrt(undefined, { versions: { web: "1.30.0" } });
+  await loadKevMinistral(read, { ort: web.ort, executionProviders: ["webgpu"], sessionOptions: { preferredOutputLocation: "cpu" } });
+  assert.equal((web.created[1].options.preferredOutputLocation as Record<string, string>)["present.0.key"], "gpu-buffer");
+  assert.equal(web.created[0].options.preferredOutputLocation, "cpu");
+});
+
+test("loadKevMinistral releases every session when the instance cannot be built, and checks the head before any", async () => {
+  const files = await syntheticBundle();
+  const read = async (p: string) => files.get(p)!;
+  const late = recordingOrt();
+  await assert.rejects(loadKevMinistral(read, { ort: late.ort, prefillChunk: 0 }), /prefillChunk/);
+  assert.deepEqual(late.released.sort(), ["decoder", "embed", "vision"]);
+  files.set("head.bin", new Uint8Array(8));
+  const early = recordingOrt();
+  await assert.rejects(loadKevMinistral(read, { ort: early.ort }), /head\.bin has 8 bytes/);
+  assert.equal(early.created.length, 0);
+});
+
+test("loadKevMinistral announces only the files it reads, and each one completes", async () => {
+  const files = await syntheticBundle();
+  const sizes = Object.fromEntries([...files].filter(([p]) => p !== "manifest.json").map(([p, b]) => [p, b.length]));
+  files.set("manifest.json", new TextEncoder().encode(JSON.stringify({ ...MANIFEST, sizes })));
+  const progress: { file: string; loaded: number; total: number }[] = [];
+  await loadKevMinistral(async (p) => files.get(p)!, { ort: recordingOrt().ort, vision: false, onProgress: (p) => progress.push(p) });
+  const announced = new Set(progress.map((p) => p.file));
+  assert.ok(![...announced].some((p) => p.includes("vision")), "the skipped encoder is not announced");
+  for (const f of announced) assert.ok(progress.some((p) => p.file === f && p.total > 0 && p.loaded === p.total), `${f} never completes`);
+  assert.equal(announced.size, Object.keys(sizes).length - 2);
 });

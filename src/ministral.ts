@@ -251,8 +251,8 @@ export class KevMinistral {
     return data;
   }
 
-  /** The image's pixel values through the vision encoder, and its token block. */
-  private async encodeImage(image: ImageLike): Promise<{ features: Float32Array; tokens: number[] }> {
+  /** The image's pixel values through the vision encoder, its token block, and the time each took. */
+  private async encodeImage(image: ImageLike): Promise<{ features: Float32Array; tokens: number[]; preprocess: number; vision: number }> {
     if (!this.vision) throw new Error("this kev-ministral instance was loaded without its vision encoder (vision: false)");
     const t0 = performance.now();
     const px = pixtralPreprocess(image);
@@ -261,8 +261,7 @@ export class KevMinistral {
     const t = out[this.vision.outputNames[0]] as Disposable;
     const features = (await t.getData()) as Float32Array;
     t.dispose?.();
-    this.timing.preprocess = t1 - t0; this.timing.vision = performance.now() - t1;
-    return { features, tokens: pixtralTokens(px, this.ids) };
+    return { features, tokens: pixtralTokens(px, this.ids), preprocess: t1 - t0, vision: performance.now() - t1 };
   }
 
   /** inputs_embeds for ids, with the image's features at its [IMG] positions. */
@@ -316,7 +315,7 @@ export class KevMinistral {
       const img = await this.encodeImage(image);
       features = img.features;
       ids = [ids[0], ids[1], ...img.tokens, ...ids.slice(2)];
-      this.timing.imageTokens = img.tokens.length;
+      this.timing.preprocess = img.preprocess; this.timing.vision = img.vision; this.timing.imageTokens = img.tokens.length;
     }
     const emb = await this.embedWithImage(ids, features);
     const { past } = await this.prefill(emb, ids.length, this.emptyPast(), 0, true, []);
@@ -406,7 +405,7 @@ export class KevMinistral {
       if (image) {
         const img = await this.encodeImage(image);
         features = img.features;
-        imageMs = this.timing.preprocess + this.timing.vision;
+        imageMs = img.preprocess + img.vision;
         const at = slots ? ids.indexOf(this.ids.img) : ids[0] === this.ids.bos ? 1 : 0;
         ids = [...ids.slice(0, at), ...img.tokens, ...ids.slice(at + (slots ? 1 : 0))];
       }
