@@ -6,6 +6,7 @@ import { Tokenizer } from "@huggingface/tokenizers";
 import type { InferenceSession } from "onnxruntime-common";
 import { PointerHead } from "./head.ts";
 import { Kev, type KevManifest, type KevOptions, type OrtModule } from "./model.ts";
+import { isMinistralManifest, KevMinistral, MINISTRAL_FILES, ministralHead, ministralParts, type KevMinistralOptions } from "./ministral.ts";
 
 export interface Progress { file: string; loaded: number; total: number }
 
@@ -173,80 +174,143 @@ class LazyFile extends Uint8Array {
   }
 }
 
-export async function loadKev(source: ModelSource, o: LoadOptions): Promise<Kev> {
-  const baseUrl = typeof source === "string" ? source : null;
-  const read = baseUrl !== null ? null : typeof source === "function" ? source : directoryReader(source as FileSystemDirectoryHandle);
-  o.onPhase?.("manifest");
-  const decode = (b: Uint8Array) => new TextDecoder().decode(b);
-  // the manifest is always fetched fresh: it names the revision everything else is cached under
-  const manifest = JSON.parse(decode(read ? await readLocal(read, "manifest.json")
-    : await fetchFile(join(baseUrl!, "manifest.json"), { cacheName: null }))) as KevManifest;
-  const variant = o.variant ?? Object.keys(manifest.variants)[0];
-  const v = manifest.variants[variant];
-  if (!v) throw new Error(`unknown variant ${variant}; have ${Object.keys(manifest.variants).join(", ")}`);
-  const tower = o.vision === false ? undefined : manifest.vision;
-  const sizes = { ...v.sizes, ...tower?.sizes };
-  // the content digest when the manifest has one: a bundle rebuilt for the same checkpoint (a spliced decoder at the
-  // text graph's URL) must not be read from the old bytes, which `run` alone would allow
-  const rev = manifest.revision ?? manifest.run;
-  // before fetching: a quota that fits one bundle but not two would otherwise refuse the new files and keep the old
-  if (baseUrl !== null) await dropOtherRevisions(baseUrl, rev, o.cacheName);
-  o.onPhase?.("download");
-  // announce every file up front so the total does not grow as downloads start
-  for (const [p, bytes] of Object.entries(sizes)) o.onProgress?.({ file: p, loaded: 0, total: bytes });
-  const get = (p: string) => read ? readLocal(read, p, { onProgress: o.onProgress, bytes: sizes[p] })
-    : fetchFile(join(baseUrl!, p), { cacheName: o.cacheName, onProgress: o.onProgress, file: p, bytes: sizes[p], rev });
-  const [tokJson, tokCfg] = (await Promise.all([get(manifest.files.tokenizer), get(manifest.files.tokenizer_config)])).map(decode);
-  // onnxruntime-node opens a graph by path and reads its weights itself; onnxruntime-web reads lazy weights on demand
-  const byPath = read ? o.filePath : undefined;
-  const readSync = read && !byPath ? o.readSync : undefined;
-  let failure: Error | undefined;
-  const failed = (e: unknown) => (failure ??= e instanceof Error ? e : new Error(String(e)));
-  const lazy = (p: string) => {
+/** Where a bundle's files come from (a URL, fetched and cached, or a local source read in place) and how each one
+ * reaches ONNX Runtime: as bytes, as a file system path (filePath), or as a weight file read on demand (readSync).
+ * Shared by loadKev and loadKevMinistral. */
+class BundleFiles {
+  readonly baseUrl: string | null;
+  readonly read: ReadModelFile | null;
+  private sizes: Record<string, number> = {};
+  private rev?: string;
+  private graphs = new Set<string>();
+  private weights = new Set<string>();
+  private failure?: Error;
+
+  constructor(source: ModelSource, private o: LoadOptions) {
+    this.baseUrl = typeof source === "string" ? source : null;
+    this.read = this.baseUrl !== null ? null : typeof source === "function" ? source : directoryReader(source as FileSystemDirectoryHandle);
+  }
+
+  /** onnxruntime-node opens a graph by path and reads its weights itself; onnxruntime-web reads lazy weights on demand */
+  private get byPath() { return this.read ? this.o.filePath : undefined; }
+  private get readSync() { return this.read && !this.byPath ? this.o.readSync : undefined; }
+
+  /** The manifest, always fetched fresh: it names the revision everything else is cached under. */
+  async manifest(): Promise<unknown> {
+    this.o.onPhase?.("manifest");
+    const bytes = this.read ? await readLocal(this.read, "manifest.json")
+      : await fetchFile(join(this.baseUrl!, "manifest.json"), { cacheName: null });
+    return JSON.parse(new TextDecoder().decode(bytes));
+  }
+
+  /** Name the files to load: their sizes when the manifest records them, the revision URL sources are cached under,
+   * and which files are graphs and which their weights. Evicts other revisions from Cache Storage before anything
+   * is fetched (a quota that fits one bundle but not two would otherwise refuse the new files and keep the old). */
+  async plan(p: { sizes: Record<string, number>; rev: string; graphs: string[]; weights: string[] }) {
+    this.sizes = p.sizes; this.rev = p.rev; this.graphs = new Set(p.graphs); this.weights = new Set(p.weights);
+    if (this.baseUrl !== null) await dropOtherRevisions(this.baseUrl, p.rev, this.o.cacheName);
+    this.o.onPhase?.("download");
+    // announce every file up front so the total does not grow as downloads start
+    for (const [file, bytes] of Object.entries(this.sizes)) this.o.onProgress?.({ file, loaded: 0, total: bytes });
+  }
+
+  /** One file as bytes. */
+  get(p: string): Promise<Uint8Array> {
+    const { o, sizes } = this;
+    return this.read ? readLocal(this.read, p, { onProgress: o.onProgress, bytes: sizes[p] })
+      : fetchFile(join(this.baseUrl!, p), { cacheName: o.cacheName, onProgress: o.onProgress, file: p, bytes: sizes[p], rev: this.rev });
+  }
+
+  async text(p: string): Promise<string> { return new TextDecoder().decode(await this.get(p)); }
+
+  private skipped(p: string) { if (this.sizes[p]) this.o.onProgress?.({ file: p, loaded: this.sizes[p], total: this.sizes[p] }); }
+
+  private recordFailure(e: unknown) { return (this.failure ??= e instanceof Error ? e : new Error(String(e))); }
+
+  private lazy(p: string) {
+    const { sizes, o } = this;
     let loaded = 0;
     return new LazyFile(sizes[p], (start, end) => {
       let got: Uint8Array;
       try {
-        got = readSync!(p, start, end - start);
+        got = this.readSync!(p, start, end - start);
       } catch (e) {
-        throw failed(e);
+        throw this.recordFailure(e);
       }
-      if (got.byteLength !== end - start) throw failed(new Error(`${p}: expected ${sizes[p]} bytes, but it ends before byte ${end} (incomplete download?)`));
+      if (got.byteLength !== end - start) throw this.recordFailure(new Error(`${p}: expected ${sizes[p]} bytes, but it ends before byte ${end} (incomplete download?)`));
       loaded += got.byteLength;
       o.onProgress?.({ file: p, loaded, total: sizes[p] });
       return got;
     });
-  };
-  const graphs = new Set([v.model, ...(tower ? [tower.model] : [])]);
-  const weights = new Set([...v.data, ...(tower?.data ?? [])]);
-  const skipped = (p: string) => { if (sizes[p]) o.onProgress?.({ file: p, loaded: sizes[p], total: sizes[p] }); };
-  const load = async (p: string): Promise<Uint8Array | string> => {
-    if (byPath && graphs.has(p)) { skipped(p); return byPath(p); }
-    if (!weights.has(p) || !(byPath || (readSync && sizes[p]))) return get(p);
-    if (readSync) return lazy(p);
-    skipped(p);
+  }
+
+  /** A graph or weight file in the form its session takes: a path (filePath), a lazy file (readSync, when the
+   * manifest gives its size), "" for a weight ORT reads beside its graph, else the bytes. */
+  async load(p: string): Promise<Uint8Array | string> {
+    if (this.byPath && this.graphs.has(p)) { this.skipped(p); return this.byPath(p); }
+    if (!this.weights.has(p) || !(this.byPath || (this.readSync && this.sizes[p]))) return this.get(p);
+    if (this.readSync) return this.lazy(p);
+    this.skipped(p);
     return "";
-  };
+  }
+
+  /** Every file at once, a few at a time. */
+  loadAll(paths: string[]): Promise<(Uint8Array | string)[]> {
+    return pool(paths.map((p) => () => this.load(p)), this.o.concurrency ?? 2);
+  }
+
+  /** Session options for a graph's external weights; none when ORT reads them beside the graph itself. */
+  external(paths: string[], files: (Uint8Array | string)[]) {
+    return this.byPath ? {} : { externalData: paths.map((p, i) => ({ path: p.split("/").pop()!, data: files[i] as Uint8Array })) };
+  }
+
+  /** InferenceSession.create, rethrowing what a lazy read recorded (ORT swallows it and reports a generic error). */
+  async create(model: Uint8Array | string, options: InferenceSession.SessionOptions): Promise<InferenceSession> {
+    try {
+      return await this.o.ort.InferenceSession.create(model, options);
+    } catch (e) {
+      throw this.failure ?? e;
+    }
+  }
+
+  /** After the sessions exist: lazily read weights are complete. */
+  done() {
+    if (this.readSync) for (const p of this.weights) this.skipped(p);
+    this.o.onPhase?.("ready");
+  }
+}
+
+/** Execution providers and whether WebGPU is among them. */
+function providers(o: LoadOptions) {
+  const eps = o.executionProviders ?? ["webgpu", "wasm"];
+  return { eps, gpu: eps.some((e) => (typeof e === "string" ? e : e.name) === "webgpu") };
+}
+
+export async function loadKev(source: ModelSource, o: LoadOptions): Promise<Kev> {
+  const files = new BundleFiles(source, o);
+  const manifest = await files.manifest() as KevManifest;
+  if (isMinistralManifest(manifest)) throw new Error(`${manifest.name} is a kev-ministral bundle: load it with loadKevMinistral`);
+  const variant = o.variant ?? Object.keys(manifest.variants)[0];
+  const v = manifest.variants[variant];
+  if (!v) throw new Error(`unknown variant ${variant}; have ${Object.keys(manifest.variants).join(", ")}`);
+  const tower = o.vision === false ? undefined : manifest.vision;
+  // the content digest when the manifest has one: a bundle rebuilt for the same checkpoint (a spliced decoder at the
+  // text graph's URL) must not be read from the old bytes, which `run` alone would allow
+  await files.plan({
+    sizes: { ...v.sizes, ...tower?.sizes }, rev: manifest.revision ?? manifest.run,
+    graphs: [v.model, ...(tower ? [tower.model] : [])], weights: [...v.data, ...(tower?.data ?? [])],
+  });
+  const [tokJson, tokCfg] = await Promise.all([files.text(manifest.files.tokenizer), files.text(manifest.files.tokenizer_config)]);
   const towerFiles = tower ? [tower.model, ...tower.data] : [];
-  const [head, graph, ...rest] = await pool([manifest.files.head, v.model, ...v.data, ...towerFiles].map((p) => () => load(p)), o.concurrency ?? 2);
+  const [head, graph, ...rest] = await files.loadAll([manifest.files.head, v.model, ...v.data, ...towerFiles]);
   const data = rest.slice(0, v.data.length), towerData = rest.slice(v.data.length);
-  const external = (paths: string[], files: (Uint8Array | string)[]) =>
-    byPath ? {} : { externalData: paths.map((p, i) => ({ path: p.split("/").pop()!, data: files[i] as Uint8Array })) };
   const tokenizer = new Tokenizer(JSON.parse(tokJson), JSON.parse(tokCfg));
   o.onPhase?.("session");
-  const eps = o.executionProviders ?? ["webgpu", "wasm"];
-  const gpu = eps.some((e) => (typeof e === "string" ? e : e.name) === "webgpu");
-  const create = async (model: Uint8Array | string, options: InferenceSession.SessionOptions) => {
-    try {
-      return await o.ort.InferenceSession.create(model, options);
-    } catch (e) {
-      throw failure ?? e;
-    }
-  };
-  const session = await create(graph, {
+  const { eps, gpu } = providers(o);
+  const session = await files.create(graph, {
     ...Kev.sessionOptions(manifest, variant, gpu),
     executionProviders: eps,
-    ...external(v.data, data),
+    ...files.external(v.data, data),
     ...o.sessionOptions,
   });
   // the tower's weights are fp16, cast to fp32 when the session loads; its output stays on the CPU for the decoder
@@ -254,17 +318,63 @@ export async function loadKev(source: ModelSource, o: LoadOptions): Promise<Kev>
   try {
     // with filePath or readSync the tower's weights are read while its session is created: a failure there must not
     // leave the decoder loaded
-    vision = tower && await create(towerData[0], {
+    vision = tower && await files.create(towerData[0], {
       graphOptimizationLevel: "all",
       executionProviders: eps,
-      ...external(tower.data, towerData.slice(1)),
+      ...files.external(tower.data, towerData.slice(1)),
       ...o.sessionOptions,
     });
   } catch (e) {
     await session.release().catch(() => undefined);
     throw e;
   }
-  if (readSync) for (const p of weights) skipped(p);
-  o.onPhase?.("ready");
+  files.done();
   return new Kev({ ort: o.ort, session, head: PointerHead.fromSafetensors((head as Uint8Array).slice().buffer), tokenizer, manifest, variant, options: o, vision });
+}
+
+export interface MinistralLoadOptions extends Omit<LoadOptions, "variant">, KevMinistralOptions {}
+
+/** Load a kev-ministral bundle (ai-ecoverse/kev-ministral, kev-ministral-3b/): the embedding table, the decoder with
+ * its gated LoRA, the Pixtral vision encoder (unless `vision: false`), the pointer head and the tokenizer, from the
+ * same sources as loadKev. One instance answers System One requests and generates text. */
+export async function loadKevMinistral(source: ModelSource, o: MinistralLoadOptions): Promise<KevMinistral> {
+  const files = new BundleFiles(source, o as LoadOptions);
+  const manifest = await files.manifest();
+  if (!isMinistralManifest(manifest)) throw new Error("not a kev-ministral bundle (manifest.json has no embed_tokens and decoder_model_merged files): load it with loadKev");
+  const parts = ministralParts(manifest, o.vision !== false);
+  await files.plan({
+    sizes: manifest.sizes ?? {}, rev: manifest.revision ?? manifest.run,
+    graphs: parts.map((g) => g.model), weights: parts.flatMap((g) => g.data),
+  });
+  const [tokJson, tokCfg, headJson] = await Promise.all([files.text(MINISTRAL_FILES.tokenizer), files.text(MINISTRAL_FILES.tokenizer_config), files.text(MINISTRAL_FILES.head_json)]);
+  const [headBin, ...loaded] = await files.loadAll([MINISTRAL_FILES.head_bin, ...parts.flatMap((g) => [g.model, ...g.data])]);
+  const tokenizer = new Tokenizer(JSON.parse(tokJson), JSON.parse(tokCfg));
+  o.onPhase?.("session");
+  const { eps, gpu } = providers(o as LoadOptions);
+  // onnxruntime-node keeps outputs on the CPU whatever the preferred location, and with one set its WebGPU EP
+  // pre-allocates outputs at a stale shape ("Tensor size mismatch"), so the locations are for onnxruntime-web only
+  const gpuBuffers = gpu && !(o.ort as { env?: { versions?: { node?: string } } }).env?.versions?.node;
+  const sessions: InferenceSession[] = [];
+  try {
+    let at = 0;
+    for (const g of parts) {
+      const graph = loaded[at], data = loaded.slice(at + 1, at + 1 + g.data.length);
+      at += 1 + g.data.length;
+      sessions.push(await files.create(graph, {
+        ...KevMinistral.sessionOptions(g.name, manifest, gpuBuffers),
+        executionProviders: eps,
+        ...files.external(g.data, data),
+        ...o.sessionOptions,
+      }));
+    }
+  } catch (e) {
+    for (const s of sessions) await s.release().catch(() => undefined);
+    throw e;
+  }
+  files.done();
+  const [embed, decoder, vision] = sessions;
+  return new KevMinistral({
+    ort: o.ort, embed, decoder, vision, tokenizer, manifest, options: o,
+    head: ministralHead(JSON.parse(headJson), headBin as Uint8Array),
+  });
 }

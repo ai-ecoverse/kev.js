@@ -166,6 +166,60 @@ uv run python -m kev_web_export.package --build build/kev-4b --out ../public/mod
 `kev_web_export.vision_eval` gives the PyTorch four-condition tables above (`--set ../eval/vision-v2 --out
 ../eval/vision-v2/results/kev-4b`).
 
+## kev-ministral
+
+[kev-ministral](https://huggingface.co/ai-ecoverse/kev-ministral) is Kev's recipe on Ministral-3-3B-Base: a decision
+LoRA and a pointer head, trained on Kev's decision suite and webrunner browser-agent data, with Pixtral's vision
+encoder in front. The LoRA is not merged: it sits in the decoder as gated branches behind a `lora_scale` input, so one
+6.6 GB download (`kev-ministral-3b/`) is both the decision model (`lora_scale = 1`) and the stock base model
+(`lora_scale = 0`). `loadKevMinistral` loads it once, as three sessions (`embed_tokens`, the decoder, the vision
+encoder), and the instance does both:
+
+```ts
+import * as ort from "onnxruntime-web/webgpu";
+import { loadKevMinistral } from "@ai-ecoverse/kev.js";
+
+const km = await loadKevMinistral("https://huggingface.co/ai-ecoverse/kev-ministral/resolve/<commit>/kev-ministral-3b", { ort });
+const res = await km.systemOne({ state, image: screenshot, questions: { action: { type: "choice", instructions, criteria } } });
+const out = await km.generate("[IMG]\nThis screenshot shows a web page with", { image: screenshot, maxTokens: 80 });
+out.text;   // greedy by default; { temperature, topK } sample. The base model continues text: it does not chat.
+```
+
+`systemOne`, `probs`, `timing`, `acceptsImages` and the options (`temperature`, `dateFacts`, `maxState`,
+`truncateStates`, `stateCacheSize`) work as on `Kev`, and the sources (URL, directory handle, read function,
+`filePath`, `readSync`) as for `loadKev`. The state is `<s> <state> [image] text`; each question runs on its cache.
+The image is resized as Mistral's `PixtralProcessor` does it (longest edge 1540, sides rounded up to 28 px) and becomes
+one `[IMG]` per 28 × 28 px, an `[IMG_BREAK]` per row and `[IMG_END]` (a 1024 × 576 screenshot is 798 tokens). Caller
+text cannot produce control tokens: a word joiner goes after the first character of every special token name in it,
+the rule the LoRA was trained with. `generate` takes the image at the prompt's `[IMG]` (or after `<s>`), masks control
+tokens unless `maskSpecial: false`, and stops at `</s>` or `maxTokens`. States and prompts are prefilled in passes of
+`prefillChunk` tokens (default 1024), since the decoder returns logits for every position it runs (512 MB per 1024
+positions); generation computes the last prompt position's logits alone. The state cache holds one state by default
+(its KV cache is 213 KB per token). The pointer head applies `head.json`'s temperature (2.2).
+
+`fixtures/kev-ministral-3b.json` is the reference: the demo's own runtime (`demo/ministral/model.ts` at `6fe9246`, which
+the model's authors checked against PyTorch) on the ten demo screenshots and their webrunner menus, with and without
+the screenshot, and three 40-token greedy generations. The library reproduces it:
+
+| Runtime (Apple M4 Max) | Mean / max \|Δp\| (20 questions) | Answers changed | Right on the demo samples, with the screenshot | Generations: tokens as the reference | Median request: with the screenshot (encoder) / without |
+|---|---|---|---|---|---|
+| Chrome, onnxruntime-web WebGPU | 2.0e-7 / 1.9e-6 | 0 | 7 / 10 | 40/40, 40/40, 40/40 | 4.1 s (0.9 s) / 1.8 s |
+| onnxruntime-node, WebGPU | 1.7e-7 / 1.9e-6 | 0 | 7 / 10 | 40/40, 40/40, 40/40 | — |
+| onnxruntime-node, CPU (4 threads) | 0.0088 / 0.037 | 0 | 7 / 10 | 40/40, 22/40, 40/40 | — |
+
+A sample's state is 240 to 1,610 tokens of page text, and its one question a menu of 14 to 32 actions (240 to 540
+tokens); the screenshot adds 798. Chrome loads the bundle from a local server in 6.7 s and generates a token in 57 ms.
+These were measured while other jobs shared the machine. The CPU's
+int8 kernels differ from WebGPU's, which moves probabilities by up to 0.04 and one greedy continuation after 22
+tokens ("New Zealand" for "the United States" as the next question); neither changes an answer. `npm test` runs the
+bundle on onnxruntime-node (`KEV_MINISTRAL_DIR`, default `public/models/kev-ministral-3b`; `KEV_MINISTRAL_EP`), and
+`npm run test:browser` in Chrome; both skip without it:
+
+```bash
+hf download ai-ecoverse/kev-ministral --include 'kev-ministral-3b/*' --local-dir public/models/_kev-ministral
+ln -s _kev-ministral/kev-ministral-3b public/models/kev-ministral-3b
+```
+
 ## How It Works
 
 Kev is a Qwen3.5 base, a rank-16 LoRA and a small pointer head. The head scores each option's `</opt>` hidden state
@@ -353,10 +407,8 @@ real browser: `node scripts/cdp.mjs '<expression>'` evaluates in the tab (`MATCH
 - [jev-omni.js](https://github.com/ai-ecoverse/jev-omni.js): the Gemma 4 12B Jev-Omni decision classifier on WebGPU.
 - [decision-vision-bench](https://github.com/ai-ecoverse/decision-vision-bench): Kev vision, cua-s1-4b-0.2 multimodal
   and Jev-Omni on one mixed image decision set, with this repo's vision-v1 and vision-v2 questions.
-- [kev-ministral demo](https://ai-ecoverse.github.io/kev.js/ministral.html) (`demo/ministral/`): Kev's recipe on
-  Ministral-3-3B-Base, where one 6.6 GB download serves decisions with a screenshot, image description and text
-  completion. The decision LoRA sits in the decoder as gated branches, so generation runs on the stock base.
-  Weights: [ai-ecoverse/kev-ministral](https://huggingface.co/ai-ecoverse/kev-ministral).
+- [kev-ministral demo](https://ai-ecoverse.github.io/kev.js/ministral.html) (`demo/ministral/`): decisions with a
+  screenshot, image description and text completion from one `loadKevMinistral` instance (see kev-ministral above).
 
 ## License
 

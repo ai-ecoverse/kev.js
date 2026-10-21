@@ -47,6 +47,8 @@ export interface EncodeOptions {
   maxBranch?: number;
   /** throw a ContextOverflow instead of truncating an over-long state */
   strict?: boolean;
+  /** how caller text becomes token ids; default userTokens (Qwen's `<|name|>` escaping). kev-ministral has its own. */
+  user?: (text: string) => number[];
 }
 
 /** A request that does not encode within its context (kev.model.ContextOverflow; kev.serve's 422). When the state is
@@ -60,15 +62,16 @@ export class ContextOverflow extends RangeError {
 
 export function encode(tok: TokenizerLike, rec: DecisionRecord, sp: SpecialTokens, o: EncodeOptions = {}): Encoding {
   const maxState = o.maxState ?? 65536, maxBranch = o.maxBranch ?? 73728;
-  const stateTokens = userTokens(tok, rec.state);
+  const user = o.user ?? ((text: string) => userTokens(tok, text));
+  const stateTokens = user(rec.state);
   const n = stateTokens.length + 1;
   if (o.strict && n > maxState) throw new ContextOverflow(`state exceeds ${maxState} tokens: ${n}`, n, maxState);
   const state = [sp.state, ...stateTokens.slice(0, maxState - 1)];
   const L = state.length;
   let tokens = L;
   const branches = rec.questions.map((q) => {
-    const instr = [sp.q, ...userTokens(tok, q.instr)];
-    const spans = q.options.map((opt) => [sp.opt, ...userTokens(tok, opt), sp.opt_end]);
+    const instr = [sp.q, ...user(q.instr)];
+    const spans = q.options.map((opt) => [sp.opt, ...user(opt), sp.opt_end]);
     const ids = [...instr, ...spans.flat(), sp.decide];
     if (ids.length > maxBranch - L) throw new ContextOverflow(`branch too long: ${ids.length}`);
     const opts: number[] = [];
