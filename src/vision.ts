@@ -71,7 +71,7 @@ function axis(inSize: number, outSize: number) {
 /** Bicubic resize of an RGBA image to three RGB planes, rounded and clamped to uint8 after each pass as torchvision
  * does for uint8 images. The horizontal pass reads the bytes directly, so nothing is allocated at the source's full
  * size: a 48-megapixel photo would otherwise take ~576 MB of float planes before being cut down to max_pixels. */
-function resizeRGBA(data: ImageLike["data"], h: number, w: number, H: number, W: number): Float32Array[] {
+export function resizeRGBA(data: ImageLike["data"], h: number, w: number, H: number, W: number): Float32Array[] {
   const ax = axis(w, W), ay = axis(h, H);
   return [0, 1, 2].map((ch) => {
     const tmp = new Float32Array(h * W);

@@ -2,7 +2,7 @@
 import * as ort from "onnxruntime-web/webgpu";
 import wasm from "onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url";
 import mjs from "onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url";
-import { loadKev, modelFiles, preprocess, toRecord, type ImageLike, type KevManifest, type OrtModule, type SystemOneRequest } from "../../src/index.ts";
+import { loadKev, loadKevMinistral, modelFiles, preprocess, toRecord, type ImageLike, type KevManifest, type OrtModule, type SystemOneRequest } from "../../src/index.ts";
 import type { Fixture } from "../fixtures.ts";
 import { argmax, bounds, MEAN_ABS_DP, Parity } from "../parity.ts";
 import { stubOrt, syntheticBundle, withoutFetch } from "../synthetic.ts";
@@ -236,7 +236,65 @@ const cases = {
     }
     return { ep, adapter, variant, run: manifest.run, fixtureRun: fx.run, loadMs: Math.round(loadMs), sets: out };
   },
+
+  /** The kev-ministral bundle served from public/models/kev-ministral-3b (README: kev-ministral) against
+   * fixtures/kev-ministral-3b.json: decisions with and without the demo screenshots (fetched from Hugging Face at the
+   * fixtures' revision), then the greedy generations, all on one loaded instance. */
+  async ministral(o: { ep?: "wasm" | "webgpu"; limit?: number }) {
+    const ep = o.ep ?? "webgpu", base = "/models/kev-ministral-3b";
+    if (!(await fetch(`${base}/manifest.json`)).ok) return { skip: `no kev-ministral bundle at public${base}` };
+    let adapter: string | null = null;
+    if (ep === "webgpu") {
+      const a = await (navigator as Navigator & { gpu?: { requestAdapter(): Promise<{ info?: Record<string, string> } | null> } }).gpu?.requestAdapter();
+      if (!a) return { skip: "no WebGPU adapter in this browser" };
+      adapter = [a.info?.vendor, a.info?.architecture, a.info?.description].filter(Boolean).join(" ") || "unknown";
+    }
+    const fx = (await (await fetch("/fixtures/kev-ministral-3b.json")).json()) as MinistralFixtures;
+    const t0 = performance.now();
+    const kev = await loadKevMinistral(base, { ort: ort as unknown as OrtModule, executionProviders: [ep], cacheName: null });
+    const loadMs = performance.now() - t0;
+    say(`kev-ministral: loaded on ${ep}${adapter ? ` (${adapter})` : ""} in ${Math.round(loadMs)} ms`);
+    const image = (path: string) => decodeImage(`https://huggingface.co/${fx.repo}/resolve/${fx.revision}/${path}`);
+    const parity = new Parity();
+    const ms: { image: number[]; text: number[]; vision: number[] } = { image: [], text: [], vision: [] };
+    let right = 0;
+    const sample = fx.fixtures.slice(0, o.limit ?? fx.fixtures.length);
+    for (const f of sample) {
+      const rec = toRecord(f.request).record, img = await image(f.image);
+      let t = performance.now();
+      const p = (await kev.probs(rec, img))[0];
+      ms.image.push(performance.now() - t); ms.vision.push(kev.timing.preprocess + kev.timing.vision);
+      parity.add(`${f.name} image`, f.probs[0], p);
+      t = performance.now();
+      parity.add(`${f.name} text`, f.probs_text[0], (await kev.probs(rec))[0]);
+      ms.text.push(performance.now() - t);
+      const pick = Object.keys((f.request.questions.action as { criteria: object }).criteria)[argmax(p)];
+      if (pick === f.gold || f.also.includes(pick)) right++;
+      say(`kev-ministral ${ep}: ${f.name} ${Math.round(ms.image.at(-1)!)} ms with the image, ${Math.round(ms.text.at(-1)!)} ms without`);
+    }
+    const generation = [];
+    for (const g of fx.generation) {
+      const r = await kev.generate(g.prompt, { maxTokens: g.max_new, image: g.image ? await image(g.image) : undefined });
+      const ref = g.ids.filter((x) => x !== 2);
+      let same = 0;
+      while (same < ref.length && r.ids[same] === ref[same]) same++;
+      generation.push({ name: g.name, same, of: ref.length, inputTokens: r.inputTokens, expectedInputTokens: g.input_tokens, text: r.text, ms: r.ms });
+    }
+    await kev.release();
+    const median = (xs: number[]) => { const s = [...xs].sort((a, b) => a - b); return Math.round(s[s.length >> 1]); };
+    return {
+      ep, adapter, loadMs: Math.round(loadMs), fixtures: sample.length, right, summary: parity.summary(),
+      violations: parity.violations({ max: 0.25, mean: MEAN_ABS_DP }), generation,
+      medianMs: { image: median(ms.image), text: median(ms.text), vision: median(ms.vision) },
+    };
+  },
 };
+
+interface MinistralFixtures {
+  repo: string; revision: string;
+  fixtures: { name: string; image: string; gold: string; also: string[]; request: SystemOneRequest; probs: number[][]; probs_text: number[][] }[];
+  generation: { name: string; prompt: string; image: string | null; max_new: number; input_tokens: number; ids: number[] }[];
+}
 
 /** The parts of an OPFS FileSystemSyncAccessHandle (workers only) the on-demand case uses. */
 interface SyncHandle { getSize(): number; read(buffer: Uint8Array, options: { at: number }): number; close(): void }

@@ -119,3 +119,19 @@ test("a Kev vision bundle matches the PyTorch image fixtures", async ({ page }) 
     expect(v.max_mean_pixel_diff, "the browser decodes and resizes the images as PIL and Qwen's processor do").toBeLessThan(2e-3);
   }
 });
+
+// kev-ministral (public/models/kev-ministral-3b: hf download ai-ecoverse/kev-ministral, README: kev-ministral) against
+// the demo's reference, decisions and generation on one instance. KEV_MINISTRAL_EP picks the backend (default webgpu).
+test("kev-ministral matches the demo's reference on decisions and generation", async ({ page }) => {
+  test.setTimeout(60 * 60_000);
+  const ep = process.env.KEV_MINISTRAL_EP ?? "webgpu";
+  const r = await run(page, "ministral", { ep, limit: Number(process.env.KEV_BROWSER_FIXTURES) || undefined });
+  if (r.skip) test.skip(true, String(r.skip));
+  console.log(`[${ep}${r.adapter ? `, ${r.adapter}` : ""}] kev-ministral: load ${r.loadMs} ms, ${r.fixtures} samples, ${r.right} right with the screenshot; ${r.summary}; median ${JSON.stringify(r.medianMs)} ms`);
+  for (const g of r.generation as { name: string; same: number; of: number; inputTokens: number; expectedInputTokens: number; text: string; ms: unknown }[]) {
+    console.log(`[${ep}] ${g.name}: ${g.same} / ${g.of} tokens as the reference, ${JSON.stringify(g.ms)}: ${JSON.stringify(g.text)}`);
+    expect(g.inputTokens).toBe(g.expectedInputTokens);
+    expect(g.same, `${g.name} follows the reference's greedy tokens`).toBeGreaterThanOrEqual(Math.min(10, g.of));
+  }
+  expect(r.violations, "parity with the demo's reference (test/parity.ts bounds)").toEqual([]);
+});
